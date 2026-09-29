@@ -162,12 +162,13 @@ py -3 notify_bridge.py --signal "标题" "内容"        # 发一条普通信号
 
 1. Cloudflare 控制台 → **Workers & Pages** → 创建 → Workers → **连接到 Git** → 选 `fictional-spoon`，分支 `main`
 2. 构建命令留空，部署命令 `npx wrangler deploy`（仓库根有 `wrangler.toml`，CF 会自动识别）
-3. 建 KV：**KV** → Create namespace（名字随意，如 `phone-notify-kv`）→ 复制返回的 **ID**
-   → 填进 `wrangler.toml` 的 `[[kv_namespaces]] id = "..."`，再 push 一次
+   仓库里的 `[[kv_namespaces]]` 默认是**注释掉的**，所以第一次就能部署成功（状态存内存）。
+   建议随后建 KV：**KV** → Create namespace（名字随意，如 `phone-notify-kv`）→ 复制 **ID**
+   → 填进 `wrangler.toml` 并去掉那三行的 `#`，再 push 一次
    （不想改文件就在 Worker → Settings → Bindings 里加 KV 绑定，变量名填 `NOTIFY_KV`，代码两种绑定名都认）
-4. Worker → **Settings → Variables and Secrets** 加三项，类型选 **Secret**：
+3. Worker → **Settings → Variables and Secrets** 加三项，类型选 **Secret**：
    `SPUG_APP_KEY`、`SPUG_DEV_TOKEN`、`SIGNAL_TOKEN`（`SIGNAL_TOKEN` 自己定，电脑端用同一个）
-5. 部署完拿到 `https://phone-notify.<你的子域>.workers.dev`
+4. 部署完拿到 `https://phone-notify.<你的子域>.workers.dev`
 
 ### 方式 B（本地 CLI 部署）
 

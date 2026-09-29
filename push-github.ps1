@@ -111,7 +111,7 @@ if ($probe.code -in @(401, 403, 404)) {
 if ($probe.code -eq 201) {
   Say "  写权限：OK（Contents: Read and write）" "Green"
 } else {
-  Say "  写权限：OK（HTTP $($probe.code) — 空仓库/git 校验提示，鉴权已通过）" "Green"
+  Say "  写权限：OK（HTTP $($probe.code)）" "Green"
 }
 
 if ($Check) {
