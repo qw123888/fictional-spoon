@@ -38,6 +38,7 @@ fictional-spoon/
 │  ├─ signal.js                # 信号接收接口：字段归一化 + 校验
 │  ├─ comm/
 │  │  ├─ index.js              # ★ CommModule：主通信接口（所有通知的唯一出口）
+│  │  ├─ dialer.js             # 电脑端拨号：把"最后一通拨号请求"丢进队列交给电脑发
 │  │  ├─ channel.js            # ChannelAdapter 基类 + ChannelRegistry
 │  │  └─ channels/
 │  │     ├─ spug_voice.js      # 电话通道（Spug 语音）
@@ -46,12 +47,14 @@ fictional-spoon/
 │     ├─ config.js             # 配置读写 + 默认值 + 客户端补丁合并
 │     ├─ window.js             # 通知时间段（时区 / 星期 / 多区间 / 跨天）
 │     ├─ guard.js              # 防轰炸：去重、最小间隔、每小时/每天上限（默认对齐 Spug 流控）
+│     ├─ outbox.js             # 拨号任务队列（KV：outbox:v1 / executor:v1，租约 90s）
 │     ├─ store.js              # 三级存储：KV → 边缘缓存(Cache API) → 内存
 │     ├─ logger.js             # 通知日志 + 计数
 │     └─ auth.js               # 访问令牌
 ├─ public/                     # 控制台界面（index.html 分页面板 / style.css / app.js）
 ├─ functions/api/[[route]].js  # 若改用 Cloudflare Pages，走这个适配入口
 ├─ pc/notify_bridge.py         # 电脑端桥接模块（同步副本，源头在监听器目录）
+├─ pc/dial_executor.py         # 电脑端拨号执行器（同源副本；监听器启动时自动拉起）
 ├─ local/server.mjs            # 本地开发服务器（Node，无需 wrangler）
 ├─ test/run.mjs                # 后端自动化测试（mock 掉电话接口，不拨号）
 ├─ test/dom-smoke.mjs          # 前端烟雾测试：真的跑 app.js 验面板切换与保存反馈
@@ -143,6 +146,44 @@ py -3 notify_bridge.py --status                     # 看网站状态
 py -3 notify_bridge.py --test                       # 打一通测试电话
 py -3 notify_bridge.py --signal "标题" "内容"        # 发一条普通信号
 ```
+
+### 4.4 电脑端拨号（Spug 的 App Key 绑了 IP 白名单时必须用这个）
+
+**问题**：Spug 的 App Key 可以绑 IP 白名单。绑了以后只有白名单里的 IP 能发消息；Cloudflare Worker 的出网 IP 是共享的、不固定、也加不进去，于是网站直接拨号永远拿到
+`spug_403 请求IP: 162.159.98.122 不在IP白名单内`。
+
+**解法**：把"最后那一次 HTTP 拨号请求"交给电脑发 —— 出口 IP 就是这台电脑的 IP（也就是白名单里那个）。
+
+```
+监听器 → 网站（只决定要不要打：总开关 / 时间段 / 防轰炸）→ 队列 outbox:v1
+      → 电脑端执行器 GET /api/outbox 领任务
+      → 本机直连 Spug 拨号（trust_env=False，绝不走代理，否则出口 IP 变成代理的）
+      → POST /api/outbox/result 回报 → 网站写日志 / 电话健康快照 / 备用 Webhook
+```
+
+**怎么开**
+
+1. 网页「电话面板 → 拨打方式」选 **电脑端拨号（用你电脑的 IP）**，保存。
+2. 正常启动监听器（`start.bat`）—— 它启动时自动拉起执行器（`bridge.start_executor()`），
+   每 3 秒问一次网站有没有要拨的电话；日志里会有一行「电脑端拨号执行器已启动」。
+3. 面板上的标签变成 **`执行器：在线 · 出口 IP 182.46.51.186`**：把这个 IP 填进
+   Spug 控制台 → 个人设置 → IP 白名单（只认这台电脑当前的实际出网 IP）。
+4. 点「📞 测试电话」：会先看到「已排队，电脑端几秒内会拨出」，随后电话由电脑拨出。
+5. 想知道真实出口 IP：执行器每次领任务时会把对端看到的 IP 记进 `executor:v1`，
+   网页标签、`GET /api/health → phone.executor.ip`、`GET /api/outbox → seenIp` 都能看到。
+
+**要点**
+
+- 拨号请求**不走代理**（执行器里写死 `trust_env=False` + `proxies={None}`）；其它流量（监听器 → 网站）照旧按 `notify.use_proxy` 走。
+- 执行器没在线时，网站**不会**谎报成功：排队返回 `reason: "no_executor"`、面板提示「已排队，等执行器上线」，任务留在队列里（租约 90 秒，过期自动可再领）。
+- 队列深度上限 100 条；网站自己拨（`site` 模式）时执行器只发心跳、不领任务、不拨号（切回 `pc` 模式，残留任务照样会被拨出去）。
+- 电脑端手动自测（不进队列、直接拨一通）：
+  ```bash
+  py -3 dial_executor.py --config config.json --status   # 看队列 / 执行器状态
+  py -3 dial_executor.py --config config.json --once     # 领一轮任务（没有就退出）
+  py -3 dial_executor.py --config config.json --dial "测试" "正文"   # 真拨一通
+  ```
+- `config.json → notify` 里的开关：`dial_executor`（默认 `true`）、`dial_poll_interval`（默认 3 秒）、`dial_batch`（一次领几条，默认 5）。
 
 ---
 
@@ -261,6 +302,8 @@ Workers & Pages → Pages → 连接到 Git → 框架预设 **None**、构建�
 | GET | `/api/logs?limit=` | 是 | 最近通知日志 + 统计 |
 | POST | `/api/logs/clear` | 是 | 清空日志 |
 | GET | `/api/adapters` | 是 | 已注册的通道适配器列表 |
+| GET | `/api/outbox?claim=1&limit=5` | 是 | **电脑端拨号队列**：执行器领任务（`claim=0` 只看不领）。同时记录执行器心跳与"它看到的 IP" |
+| POST | `/api/outbox/result` | 是 | **执行器回报拨号结果**：`{id,ok,reason,detail,requestId,ms,status,host}` → 网站写日志 / 健康快照 / 备用通道 |
 
 `/api/signal` 返回统一结构：
 
@@ -322,7 +365,10 @@ comm.register(new SmsAdapter(cfg));   // 非 ChannelAdapter 实例会被拒绝
 
 | 现象 | 原因与处理 |
 | --- | --- |
-| `spug_403` + `受限IP: x.x.x.x 您的IP不在白名单内` | Spug 控制台给这个 App Key 开了 IP 白名单。**Cloudflare 的出网 IP 是动态且不公开的，无法加白**：去 Spug 控制台把该 App Key 的 IP 白名单关掉，或者**换一个没开白名单的 App Key**（实测：同一账号下两个 App Key，一个被 `受限IP` 拦住、另一个 `code:200 请求成功` —— 白名单是**按 App Key** 生效的）。 |
+| `spug_403` + `请求IP: 162.159.98.122 不在IP白名单内` | **Cloudflare 的出网 IP，加不进白名单**。改用「电脑端拨号」：网页电话面板把「拨打方式」切成 *电脑端拨号*，启动监听器（自动拉起执行器），把这个标签里的电脑出口 IP 加进 Spug 白名单。见 §4.4。 |
+| 面板显示 `执行器：未连接` / 返回 `reason: "no_executor"` | 监听器的拨号执行器没跑起来。启动 `start.bat`（日志应有「电脑端拨号执行器已启动」）；若没有，检查 `config.json → notify.dial_executor` 是不是 `false`，以及 `dial_executor.py` 是否和监听器在同一目录。任务不会丢，执行器上线后几秒内就会拨出去。 |
+| 面板显示 `执行器：离线（N 分钟前在线过）` | 电脑端进程退出了（关掉窗口 / 关机）。重新启动即可；队列里的任务会等它回来。 |
+| `spug_403` + `请求IP: 1.2.3.4 不在IP白名单内`（电脑端拨号也报） | 这台电脑现在的出网 IP 和白名单里写的不一样（换了网络 / 代理客户端在抢路由）。看面板标签里的「出口 IP」，把它更新进 Spug 白名单。注意执行器**不走代理**，代理开着也不影响它的出口 IP。 |
 | `spug_400` + `因应用key限制，无可用通道` | 这个 App Key 的通道权限范围里没有你在 `channel` 里指定的通道。到 Spug 控制台改该 App Key 的授权通道，或换一个 Key。 |
 | 接口报 `Invalid data type for parse` | 请求体带了 **UTF-8 BOM**（PowerShell `Set-Content -Encoding UTF8` 会写 BOM）。用无 BOM 的 UTF-8 重发即可；页面与 Node/Python 代码不受影响。 |
 | 电话打了但对方没接到 / `status=3` `此号码触发流控` | 撞上 Spug 语音通道自身的限流：**1 通/分钟、5 通/小时、20 通/天**（按号码）。此时 `xsend` 仍返回 `code:200`，只有查发送状态才看得到 —— 所以站点侧默认值已按此对齐（见 §4），撞限流的那通**不计费**。 |

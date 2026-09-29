@@ -23,14 +23,23 @@ config.json 片段示例
     "content_template": "#{channel} {author}: {content}",
     "content_limit": 120,
     "sources": ["discord"],
-    "min_interval": 0
+    "min_interval": 0,
+    "dial_executor": true,
+    "dial_poll_interval": 3
 }
+
+电脑端拨号（Spug 绑了 IP 白名单时必开）
+---------------------------------------
+网站把 phone.dialVia 设成 "pc" 后，网站只负责"要不要打"，最后那次拨号请求
+由本机的 dial_executor.DialExecutor 直连 Spug 发出（出口 IP = 本机 IP）。
+监听器启动时会自动 bridge.start_executor()。
 
 命令行自测
 ---------
 py -3 notify_bridge.py --test                       # 打一通测试电话
 py -3 notify_bridge.py --signal "标题" "内容"        # 发一条测试信号
 py -3 notify_bridge.py --status                     # 查看网站状态
+py -3 dial_executor.py --config config.json --once  # 手动领一次拨号任务
 """
 
 from __future__ import annotations
@@ -68,6 +77,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "sources": ["discord"],
     "min_interval": 0,
     "use_proxy": False,
+    # 电脑端拨号执行器（网站 phone.dialVia = "pc" 时才真正干活）：
+    # Spug 的 App Key 绑了 IP 白名单时，最后那次拨号请求必须从本机发出。
+    "dial_executor": True,
+    "dial_poll_interval": 3,
+    "dial_batch": 5,
 }
 
 
@@ -88,6 +102,7 @@ class NotifyBridge:
         self.stats = {"queued": 0, "sent": 0, "failed": 0, "skipped": 0, "dropped": 0}
         self._lock = threading.Lock()
         self._worker: Optional[threading.Thread] = None
+        self._executor = None
         if self.enabled:
             self._start_worker()
 
@@ -186,8 +201,36 @@ class NotifyBridge:
         """查询网站状态（不需要令牌）。"""
         return self._request("/api/health", None, method="GET")
 
+    # ---------- 电脑端拨号执行器（Spug IP 白名单场景）----------
+    def start_executor(self) -> bool:
+        """
+        启动"电脑端拨号执行器"：轮询网站的任务队列，在本机直连 Spug 拨号。
+        网站 phone.dialVia = "pc" 时它是唯一能把电话打出去的路径；
+        为 "site" 时它只发心跳、不拨号（不会重复打）。
+        监听器启动时调一次即可；它是后台线程，不影响轮询。
+        """
+        if self._executor is None:
+            try:
+                from dial_executor import DialExecutor
+            except ImportError:  # 允许把执行器放在 pc/ 或 win/ 任一目录
+                import os
+                import sys
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                from dial_executor import DialExecutor
+            self._executor = DialExecutor(self, log_fn=self._log)
+        return self._executor.start()
+
+    def stop_executor(self):
+        if self._executor is not None:
+            self._executor.stop()
+
+    @property
+    def executor(self):
+        return self._executor
+
     def close(self):
         self._stop.set()
+        self.stop_executor()
 
     # ---------- 内部 ----------
     def _render(self, template: str, event: dict, source: str) -> str:
@@ -225,7 +268,11 @@ class NotifyBridge:
                 else:
                     self.stats["failed"] += 1
             if result.get("ok"):
-                self._log(f"电话通知已发出: {signal['title']}", "ok")
+                if result.get("queued"):
+                    # 网站是"电脑端拨号"模式：这里只是排上队，真正拨号由执行器做
+                    self._log(f"电话已交给电脑端拨号: {signal['title']}（{result.get('detail', '')}）", "ok")
+                else:
+                    self._log(f"电话通知已发出: {signal['title']}", "ok")
             elif result.get("skipped"):
                 self._log(f"电话通知被网站跳过（{result.get('reason', '')}）：{result.get('detail', '')}", "info")
             else:

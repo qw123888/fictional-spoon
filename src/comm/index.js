@@ -4,6 +4,8 @@ import { checkGuard, commitGuard, fingerprintOf, guardStatus } from "../core/gua
 import { ChannelRegistry } from "./channel.js";
 import { PhoneCallAdapter } from "./channels/spug_voice.js";
 import { WebhookAdapter } from "./channels/webhook.js";
+import { PcDialDispatcher } from "./dialer.js";
+import { executorStatus, settle as settleTask } from "../core/outbox.js";
 
 /**
  * ============================================================
@@ -33,6 +35,8 @@ export class CommModule {
     // 默认通道：电话 + Webhook 备用
     this.register(new PhoneCallAdapter());
     this.register(new WebhookAdapter());
+    // 电话的另一种出口：把拨号交给电脑端执行器（phone.dialVia === "pc" 时启用）
+    this.dialer = new PcDialDispatcher({ store, log });
   }
 
   register(adapter) {
@@ -142,20 +146,27 @@ export class CommModule {
     }
 
     // 4) 组装 payload 并发送
+    //    电话通道有两种出口：网站自己打（默认），或者排队让电脑端打（dialVia=pc，
+    //    因为 Spug 的 IP 白名单只认电脑的出口 IP，Worker 的共享 IP 永远进不去）
     const payload = this._buildPayload(cfg, signal);
     const ctx = { config: cfg, store: this.store, log: this.log, env: this.env };
-    const result = await this._sendWithRetry(adapter, payload, ctx, cfg.phone.retry);
+    const viaPc = adapter.kind === "phone" && String(cfg.phone.dialVia || "site") === "pc";
+    const result = viaPc
+      ? await this.dialer.dispatch(payload, { source, force, fingerprint: fp, signalId: signal.id || "" })
+      : await this._sendWithRetry(adapter, payload, ctx, cfg.phone.retry);
 
     // 5) 电话通道的健康快照
-    if (adapter.kind === "phone") {
+    //    走电脑端拨号时这里不写：队列里还没拨出去，写了会显示一个假的"失败/成功"。
+    //    真正的结果由执行器回报 → settleDialResult() 写。
+    if (adapter.kind === "phone" && !result.queued) {
       await this.store.set(PHONE_HEALTH_KEY, {
         ok: result.ok, ts: Date.now(), reason: result.reason || "", detail: result.detail || "", ms: result.ms ?? 0
       });
     }
 
-    // 6) 备用通道（电话挂了但还有网时）
+    // 6) 备用通道（电话挂了但还有网时；排队中的不算"挂了"，等执行器回报再说）
     let fallback = null;
-    if (!result.ok && cfg.fallback.enabled && adapter.kind !== "webhook") {
+    if (!result.ok && !result.queued && cfg.fallback.enabled && adapter.kind !== "webhook") {
       const fb = this.registry.get("webhook");
       if (fb) {
         const r = await this._sendWithRetry(fb, payload, ctx, 0);
@@ -172,6 +183,8 @@ export class CommModule {
     return this._finish({
       ok: result.ok, skipped: false, reason: result.reason, detail: result.detail,
       requestId: result.requestId, attempts: result.attempts,
+      queued: result.queued, taskId: result.taskId, executor: result.executor,
+      route: viaPc ? "phone-pc" : kind,
       signal, cfg, started, source, kind, window: win, fingerprint: force ? "" : fp, force, fallback
     });
   }
@@ -179,6 +192,67 @@ export class CommModule {
   /** 测试电话：force=true，绕过开关/时间段/去重，但完整走一遍通道 */
   async testCall({ title = "测试电话", content = "", source = "test" } = {}) {
     return await this.notify({ kind: "phone", title, content, source, force: true }, { force: true });
+  }
+
+  /**
+   * 电脑端执行器回报拨号结果（电脑端拨号模式的闭环最后一步）
+   *  1) 出队   2) 写通知日志   3) 更新电话健康快照   4) 失败时走备用通道
+   * @param {{id:string, ok:boolean, reason?:string, detail?:string, requestId?:string, ms?:number, status?:number}} report
+   * @param {{ip?:string}} [opts] ip = 网站看到的执行器来源 IP（=拨号出口 IP 的证据）
+   */
+  async settleDialResult(report = {}, opts = {}) {
+    const id = String(report.id || "");
+    if (!id) return { ok: false, error: "bad_param", detail: "缺少任务 id" };
+
+    const { task, depth: left } = await settleTask(this.store, id);
+    if (!task) {
+      return { ok: false, error: "unknown_task", detail: `队列里没有这个任务（可能已被另一个执行器领走并回报）：${id}`, depth: left };
+    }
+
+    const cfg = await this.config();
+    const ok = Boolean(report.ok);
+    const title = task.title || "通知";
+    const content = task.content || "";
+    const source = task.source || "pc";
+    const reason = String(report.reason || (ok ? "sent" : "failed"));
+    const detail = String(report.detail || "");
+    const ms = Number(report.ms || 0);
+    const requestId = String(report.requestId || "");
+    const ip = opts.ip || report.ip || "";
+
+    await this.log.push({
+      level: ok ? "ok" : "error",
+      title, content, source,
+      route: "phone-pc",
+      ok, reason, detail, ms, requestId,
+      fingerprint: task.fingerprint || "",
+      force: Boolean(task.force)
+    });
+
+    await this.store.set(PHONE_HEALTH_KEY, {
+      ok, ts: Date.now(), reason, detail, ms, requestId,
+      via: "pc", ip, host: String(report.host || "")
+    });
+
+    let fallback = null;
+    if (!ok && cfg.fallback.enabled) {
+      const fb = this.registry.get("webhook");
+      if (fb) {
+        const ctx = { config: cfg, store: this.store, log: this.log, env: this.env };
+        const r = await this._sendWithRetry(fb, { title, content, source, meta: {} }, ctx, 0);
+        fallback = { ok: r.ok, detail: r.detail, reason: r.reason };
+        await this.log.push({
+          level: r.ok ? "warn" : "error",
+          title, content, source: `${source}#fallback`,
+          route: "webhook", ok: r.ok, reason: r.reason, detail: r.detail, ms: r.ms
+        });
+      }
+    }
+
+    return {
+      ok: true, settled: true, taskId: id, dialed: ok, reason, detail, ms,
+      requestId, depth: left, ip, fallback
+    };
   }
 
   /** 运行状态汇总，给界面顶部状态栏用 */
@@ -203,7 +277,12 @@ export class CommModule {
         warn: this.store.backend === "memory" ? "当前是内存存储，配置/日志在重启或换机房后会丢：请绑定 KV，或改用边缘缓存" : this.store.backend === "edge-cache" ? "当前用边缘缓存兜底（不绑 KV 也能存住），但换机房可能读到稍旧的副本；建议绑定 KV" : ""
       },
       auth: { configured: token },
-      phone: { configured: Boolean(cfg.spug.appKey), last: phone },
+      phone: {
+        configured: Boolean(cfg.spug.appKey),
+        dialVia: String(cfg.phone.dialVia || "site"),
+        executor: await executorStatus(this.store),
+        last: phone
+      },
       adapters: this.adapters()
     };
   }
@@ -244,7 +323,7 @@ export class CommModule {
       title: signal.title || "",
       content: signal.content || "",
       source,
-      route: kind || "unknown",
+      route: info.route || kind || "unknown",
       ok,
       reason: reason || "",
       detail: detail || "",
@@ -264,6 +343,10 @@ export class CommModule {
       kind: kind || "unknown",
       source,
       logId: item.id,
+      // 走电脑端拨号时，这里只是"已排队"；真正拨没拨成等执行器回报
+      queued: Boolean(info.queued),
+      taskId: info.taskId || "",
+      executor: info.executor || null,
       window: win ? { active: win.active, detail: win.detail, now: win.now.hhmm } : null,
       fallback: fallback || null
     };

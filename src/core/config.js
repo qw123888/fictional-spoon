@@ -17,7 +17,11 @@ export const DEFAULT_CONFIG = {
     retry: 2,                // 失败重试次数（不含首次）
     timeoutMs: 15000,
     titlePrefix: "[监听器]",
-    contentLimit: 120        // 语音播报内容截断长度
+    contentLimit: 120,       // 语音播报内容截断长度
+    // 谁来发最后那一次 HTTP 拨号请求：
+    //   "site" = 网站自己发（Worker 出口 IP 是 Cloudflare 共享 IP，只能用于没绑 IP 白名单的 App Key）
+    //   "pc"   = 排队给电脑端执行器发（用你电脑的出口 IP，App Key 绑了 IP 白名单时必须用这个）
+    dialVia: "site"
   },
   // 自动电话时间段
   window: {
@@ -95,6 +99,7 @@ export function normalizeConfig(input = {}) {
   c.phone.timeoutMs = clampInt(c.phone.timeoutMs, 1000, 60000, 15000);
   c.phone.titlePrefix = String(c.phone.titlePrefix ?? "").slice(0, 32);
   c.phone.contentLimit = clampInt(c.phone.contentLimit, 20, 500, 120);
+  c.phone.dialVia = String(c.phone.dialVia || "site").toLowerCase() === "pc" ? "pc" : "site";
 
   c.window.enabled = c.window.enabled === undefined ? DEFAULT_CONFIG.window.enabled : Boolean(c.window.enabled);
   c.window.mode = c.window.mode === "outside" ? "outside" : "inside";

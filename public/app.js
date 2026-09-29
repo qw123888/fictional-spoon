@@ -219,6 +219,8 @@ function renderHealth(h) {
   const winCls = winOff ? "warn" : win.active ? "ok" : "warn";
   const winValue = winOff ? "限制已关闭" : win.active ? "允许拨打" : "暂停中";
   const phoneValue = phone.configured ? "已配置" : "未配置";
+  const viaText = phone.dialVia === "pc" ? "电脑端拨号" : "网站直拨";
+  const phoneLabel = phone.configured ? `${phoneValue} · ${viaText}` : phoneValue;
   const lastDetail = last
     ? `最近一次：${last.ok ? "成功" : "失败"} ${fmtTime(new Date(last.ts).toISOString())}${last.detail ? ` · ${last.detail.slice(0, 40)}` : ""}`
     : "尚无发送记录";
@@ -237,7 +239,7 @@ function renderHealth(h) {
     card("自动通知时间段", winValue, win.detail || "", winCls, winOff ? "big" : win.active ? "big" : "big"),
     card("已拨打通话", `${guard.usedToday ?? 0} / ${guard.maxPerDay ?? "-"} <span style="color:var(--fg-dim)">(今天)</span>`, `本小时 ${guard.usedThisHour ?? 0}/${guard.maxPerHour ?? "-"}${guard.lastSendAt ? ` · 上次：${fmtTime(guard.lastSendAt)}` : " · 本小时尚未拨打"}`, "", "count"),
     card("剩余语音", balValue, balDetail, balCls, "count"),
-    card("电话接口", phoneValue, lastDetail, phone.configured ? "" : "warn"),
+    card("电话接口", phoneLabel, lastDetail, phone.configured ? "" : "warn"),
     card("通知总开关", h.enabled ? "已开启" : "已关闭", h.enabled ? "收到信号会按时间段拨打" : "仅 force 信号可穿透", h.enabled ? "ok" : "warn"),
     card("存储 / 令牌", h.storage.label || (h.storage.backend === "cloudflare-kv" ? "KV 持久化" : "内存（临时）"), `${h.auth.configured ? "令牌已设置" : "⚠ 未设置令牌，站点开放"}`, h.auth.configured ? (h.storage.durable ? "" : "warn") : "warn")
   ].join("");
@@ -257,6 +259,50 @@ function renderHealth(h) {
   // 顶栏总开关跟随服务器真实状态（正在切换时不回填，免得开关自己跳回去）
   if (!state.masterPending) renderMaster(Boolean(h.enabled));
   renderStorageBanner(h.storage);
+  renderExecutor(phone);
+}
+
+/**
+ * 拨打方式提示 + 电脑端执行器在线状态
+ * 网站 phone.dialVia = "pc" 时，最后那次拨号请求由电脑发出（Spug IP 白名单只认电脑的 IP）
+ */
+function applyDialViaUI() {
+  const via = $("cfg-dialvia").value === "pc" ? "pc" : "site";
+  const hint = $("dialvia-hint");
+  if (!hint) return;
+  hint.innerHTML = via === "pc"
+    ? "✅ 电脑端拨号：网站只负责<b>要不要打</b>（总开关 / 时间段 / 防轰炸 / 日志），最后那次拨号请求由监听器所在电脑直连 Spug 发出，出口 IP 就是你电脑的 IP —— Spug 的 App Key 绑了 IP 白名单时必须用这个。要求：监听器正在运行（它每 3 秒问一次网站有没有活）。"
+    : "网站直拨：由 Cloudflare 直接请求 Spug，出口 IP 是 Cloudflare 的共享 IP（例如 162.159.98.122）。<b>App Key 一旦绑了 IP 白名单，这里必然被拒（spug_403）</b>，要改用「电脑端拨号」。";
+  hint.className = `hint${via === "pc" ? " ok" : ""}`;
+}
+
+function renderExecutor(phone) {
+  const tag = $("executor-tag");
+  const hint = $("executor-hint");
+  if (!tag) return;
+  const ex = (phone && phone.executor) || {};
+  const via = phone && phone.dialVia === "pc" ? "pc" : "site";
+  const age = ex.ageSeconds === null || ex.ageSeconds === undefined ? "" : ex.ageSeconds < 90 ? `${ex.ageSeconds} 秒前` : `${Math.round(ex.ageSeconds / 60)} 分钟前`;
+  if (ex.online) {
+    tag.textContent = `执行器：在线${ex.ip ? ` · 出口 IP ${ex.ip}` : ""}`;
+    tag.className = "pill on";
+  } else if (ex.seen) {
+    tag.textContent = `执行器：离线（${age}在线过）`;
+    tag.className = "pill bad";
+  } else {
+    tag.textContent = "执行器：未连接";
+    tag.className = "pill";
+  }
+  if (!hint) return;
+  if (via !== "pc") {
+    hint.textContent = ex.online
+      ? `电脑端执行器在线（${ex.host || "本机"}${ex.ip ? `，出口 IP ${ex.ip}` : ""}），但当前拨打方式是「网站直拨」——白名单场景要在这里切过去并保存。`
+      : "当前拨打方式是「网站直拨」，电脑端执行器没有连接（Spug 绑了 IP 白名单时需要切到「电脑端拨号」并启动监听器）。";
+    return;
+  }
+  hint.textContent = ex.online
+    ? `正在由电脑端拨号（${ex.host || "本机"}${ex.ip ? `，出口 IP ${ex.ip}` : ""}）。这个 IP 必须出现在 Spug 的 IP 白名单里。`
+    : "电脑端执行器没在线：电话会排在队列里等着，等监听器（start.bat）启动后 3 秒内就会拨出去。";
 }
 
 /* ---------------- 配置表单 ---------------- */
@@ -321,6 +367,8 @@ function fillConfig(cfg) {
   $("cfg-timeout").value = cfg.phone.timeoutMs;
   $("cfg-appkey").value = cfg.spug.appKey || "";
   $("cfg-devtoken").value = cfg.spug.devToken || "";
+  $("cfg-dialvia").value = cfg.phone.dialVia === "pc" ? "pc" : "site";
+  applyDialViaUI();
 
   $("cfg-fallback-enabled").checked = Boolean(cfg.fallback.enabled);
   $("cfg-fallback-url").value = cfg.fallback.webhookUrl || "";
@@ -352,7 +400,8 @@ function collectConfig() {
       titlePrefix: $("cfg-prefix").value,
       contentLimit: Number($("cfg-contentlimit").value),
       retry: Number($("cfg-retry").value),
-      timeoutMs: Number($("cfg-timeout").value)
+      timeoutMs: Number($("cfg-timeout").value),
+      dialVia: $("cfg-dialvia").value === "pc" ? "pc" : "site"
     },
     fallback: { enabled: $("cfg-fallback-enabled").checked, webhookUrl: $("cfg-fallback-url").value.trim() },
     spug: { appKey: $("cfg-appkey").value.trim(), devToken: $("cfg-devtoken").value.trim() }
@@ -479,12 +528,20 @@ async function refreshConfig() {
 /* ---------------- 操作 ---------------- */
 async function doTestCall() {
   const btn = $("btn-test");
+  const pcMode = $("cfg-dialvia") && $("cfg-dialvia").value === "pc";
   btn.disabled = true;
-  $("op-result").textContent = "正在拨号…";
+  $("op-result").textContent = pcMode ? "已排队，等电脑端拨号…" : "正在拨号…";
   $("op-result").className = "hint";
   const { data } = await api("/api/test-call", { method: "POST", body: { title: "监听器测试电话" } });
   btn.disabled = false;
-  if (data && data.ok) {
+  if (data && data.queued) {
+    // 电脑端拨号模式：这里只代表"排上队了"，真正拨出去与否由电脑端执行器决定
+    const ok = data.ok;
+    $("op-result").textContent = `${ok ? "📮" : "⚠️"} ${data.detail || "已排队"}`;
+    $("op-result").className = `hint ${ok ? "" : "bad"}`;
+    toast(ok ? "已排队，电脑端几秒内会拨出" : data.detail || "已排队，但执行器不在线", ok ? "ok" : "warn");
+    refreshHealth();
+  } else if (data && data.ok) {
     $("op-result").textContent = `✅ 已发出（${data.ms}ms，req ${data.requestId || "-"}），留意手机来电`;
     $("op-result").className = "hint ok";
     toast("测试电话已发出，请留意来电", "ok");
@@ -697,6 +754,12 @@ function bind() {
   // 时间段总开关：关掉后把下面的星期/区间置灰，避免误以为还在生效
   $("cfg-window-enabled").addEventListener("change", () => {
     applyWindowEnabledUI();
+    markDirty();
+  });
+
+  // 拨打方式：切换时立刻更新说明文案（真正生效要保存配置）
+  $("cfg-dialvia").addEventListener("change", () => {
+    applyDialViaUI();
     markDirty();
   });
 

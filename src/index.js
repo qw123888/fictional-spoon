@@ -5,6 +5,7 @@ import { CommModule } from "./comm/index.js";
 import { handleSignal } from "./signal.js";
 import { checkAuth, saveToken, loadToken, extractToken } from "./core/auth.js";
 import { describeWindow } from "./core/window.js";
+import { claim as claimTasks, depth as outboxDepth, executorStatus, heartbeat as executorHeartbeat, publicTask } from "./core/outbox.js";
 
 /**
  * HTTP 路由层（唯一把 URL 映射到模块的地方）
@@ -76,6 +77,16 @@ async function readJson(request) {
   } catch {
     return null;
   }
+}
+
+/**
+ * 网站看到的调用方 IP。
+ * 电脑端执行器用它来证明"拨号就是从这台电脑出去的"（Spug 白名单认的就是这个 IP）。
+ */
+function clientIp(request) {
+  const h = request.headers;
+  const raw = h.get("cf-connecting-ip") || h.get("x-real-ip") || (h.get("x-forwarded-for") || "").split(",")[0] || "";
+  return String(raw).trim().slice(0, 60);
 }
 
 export async function handleApi(request, env = {}) {
@@ -203,6 +214,60 @@ export async function handleApi(request, env = {}) {
       const requestId = url.searchParams.get("requestId") || "";
       const result = await comm.queryStatus(requestId, url.searchParams.get("kind") || "phone");
       return json(result);
+    })();
+  }
+
+  // ---------- 电脑端拨号：任务队列（执行器轮询领取）----------
+  // phone.dialVia = "pc" 时的闭环：
+  //   comm.notify() → 队列 → 电脑端在这里领任务 → 本地直连 Spug 拨号（用电脑的出口 IP）
+  //   → POST /api/outbox/result 回报 → 网站写日志/健康/备用通道
+  if (path === "/api/outbox" && method === "GET") {
+    return needAuth(async () => {
+      const cfg = await comm.config();
+      const mode = String(cfg.phone.dialVia || "site");
+      const ip = clientIp(request);
+      // 网站自己拨（site）时队列该是空的；万一还留着上一个模式的任务，也不要领：
+      // 领走 = 上 90 秒租约，白白搅动队列。留着等切回 pc 模式再拨。
+      const doClaim = url.searchParams.get("claim") !== "0" && mode === "pc";
+      const limit = Math.max(1, Math.min(20, Number(url.searchParams.get("limit") || 5) || 5));
+      const got = doClaim ? await claimTasks(store, { limit }) : { tasks: [], depth: await outboxDepth(store) };
+      // 心跳带节流：执行器几秒一次轮询，不能每次都写 KV（免费额度 1000 写/天）
+      await executorHeartbeat(store, {
+        host: url.searchParams.get("host") || "",
+        version: url.searchParams.get("version") || "",
+        poll: limit,
+        ip,
+        hasTasks: got.tasks.length > 0
+      });
+      return json({
+        ok: true,
+        mode,
+        claim: doClaim,
+        tasks: got.tasks.map(publicTask),
+        depth: got.depth,
+        executor: await executorStatus(store),
+        seenIp: ip,
+        // 执行器要的东西：拨号参数 + 只能查余额/查状态的开发者 Token
+        spug: {
+          baseUrl: cfg.spug.baseUrl,
+          appKey: cfg.spug.appKey,
+          devToken: cfg.spug.devToken,
+          channel: cfg.phone.channel,
+          targets: cfg.phone.targets,
+          contentLimit: cfg.phone.contentLimit,
+          timeoutMs: cfg.phone.timeoutMs
+        },
+        serverTime: new Date().toISOString()
+      });
+    })();
+  }
+
+  if (path === "/api/outbox/result" && method === "POST") {
+    return needAuth(async () => {
+      const body = await readJson(request);
+      if (body === null) return json({ ok: false, error: "bad_json" }, 400);
+      const result = await comm.settleDialResult(body, { ip: clientIp(request) });
+      return json(result, result.error === "bad_param" ? 400 : 200);
     })();
   }
 

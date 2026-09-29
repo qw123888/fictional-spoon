@@ -188,6 +188,17 @@
         <label class="field"><span>内容截断</span><input id="cfg-contentlimit" type="number" min="20" max="500"></label>
         <label class="field"><span>重试次数</span><input id="cfg-retry" type="number" min="0" max="5"></label>
         <label class="field"><span>超时(ms)</span><input id="cfg-timeout" type="number" min="1000" max="60000"></label>
+        <label class="field"><span>拨打方式</span>
+          <select id="cfg-dialvia">
+            <option value="site">网站直拨（Cloudflare 出口 IP）</option>
+            <option value="pc">电脑端拨号（用你电脑的 IP）</option>
+          </select>
+        </label>
+        <div class="hint" id="dialvia-hint"></div>
+        <div class="row">
+          <span class="pill" id="executor-tag">执行器：未知</span>
+        </div>
+        <div class="hint" id="executor-hint"></div>
         <label class="field"><span>App Key</span><input id="cfg-appkey" type="text" placeholder="ak_..."></label>
         <label class="field"><span>开发者Token</span><input id="cfg-devtoken" type="text" placeholder="只用于查余额与发送状态"></label>
         <div class="hint">两者都可放 Cloudflare Secret（<code>SPUG_APP_KEY</code> / <code>SPUG_DEV_TOKEN</code>），环境变量优先。App Key 用来打电话，开发者 Token 只能查余额和发送结果、不能发消息。</div>
