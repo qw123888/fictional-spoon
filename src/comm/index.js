@@ -197,8 +197,8 @@ export class CommModule {
   /**
    * 电脑端执行器回报拨号结果（电脑端拨号模式的闭环最后一步）
    *  1) 出队   2) 写通知日志   3) 更新电话健康快照   4) 失败时走备用通道
-   * @param {{id:string, ok:boolean, reason?:string, detail?:string, requestId?:string, ms?:number, status?:number}} report
-   * @param {{ip?:string}} [opts] ip = 网站看到的执行器来源 IP（=拨号出口 IP 的证据）
+   * @param {{id:string, ok:boolean, reason?:string, detail?:string, requestId?:string, ms?:number, status?:number, host?:string, dialIp?:string}} report
+   * @param {{ip?:string}} [opts] ip = 网站看到的执行器来源 IP（心跳 IP，可能被代理换线，不等于拨号出口 IP）
    */
   async settleDialResult(report = {}, opts = {}) {
     const id = String(report.id || "");
@@ -219,6 +219,8 @@ export class CommModule {
     const ms = Number(report.ms || 0);
     const requestId = String(report.requestId || "");
     const ip = opts.ip || report.ip || "";
+    // 拨号出口 IP：优先用执行器自己探测的（它直连外网那个），回退到网站看到的心跳 IP
+    const dialIp = String(report.dialIp || opts.dialIp || "");
 
     await this.log.push({
       level: ok ? "ok" : "error",
@@ -231,7 +233,7 @@ export class CommModule {
 
     await this.store.set(PHONE_HEALTH_KEY, {
       ok, ts: Date.now(), reason, detail, ms, requestId,
-      via: "pc", ip, host: String(report.host || "")
+      via: "pc", ip, dialIp, host: String(report.host || "")
     });
 
     let fallback = null;
@@ -251,7 +253,7 @@ export class CommModule {
 
     return {
       ok: true, settled: true, taskId: id, dialed: ok, reason, detail, ms,
-      requestId, depth: left, ip, fallback
+      requestId, depth: left, ip, dialIp, fallback
     };
   }
 

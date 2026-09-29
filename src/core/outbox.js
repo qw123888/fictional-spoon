@@ -121,7 +121,7 @@ export async function heartbeat(store, info = {}, { now = Date.now() } = {}) {
   const prev = await store.get(EXECUTOR_KEY, null);
   const prevTs = Number((prev && prev.ts) || 0);
   const fresh = prevTs > 0 && now - prevTs < HEARTBEAT_MIN_MS;
-  if (fresh && !info.force && !info.hasTasks) return prev;
+  if (fresh && !info.force && !info.hasTasks && !changed(prev, info)) return prev;
 
   const next = {
     ts: now,
@@ -129,11 +129,22 @@ export async function heartbeat(store, info = {}, { now = Date.now() } = {}) {
     host: String(info.host || (prev && prev.host) || "").slice(0, 60),
     version: String(info.version || (prev && prev.version) || "").slice(0, 20),
     ip: String(info.ip || (prev && prev.ip) || "").slice(0, 60),
+    // 执行器直连外网时的 IP（= 要填进 Spug 白名单的那个），与 ip（它连网站时的 IP）分开记
+    dialIp: String(info.dialIp || (prev && prev.dialIp) || "").slice(0, 60),
     ua: String(info.ua || "").slice(0, 90),
     poll: Number(info.poll || (prev && prev.poll) || 0)
   };
   await store.set(EXECUTOR_KEY, next);
   return next;
+}
+
+/** 执行器自报的关键信息变了就立刻写（换机器 / 换出口 IP 时面板得马上反映出来） */
+function changed(prev, info) {
+  if (!prev) return true;
+  const pick = (v) => String(v || "").slice(0, 60);
+  return pick(info.host) !== pick(prev.host)
+    || pick(info.version) !== pick(prev.version)
+    || pick(info.dialIp) !== pick(prev.dialIp);
 }
 
 /** 执行器在线状态（给 /api/health 和界面用） */
@@ -148,6 +159,7 @@ export async function executorStatus(store, { now = Date.now() } = {}) {
     host: (info && info.host) || "",
     version: (info && info.version) || "",
     ip: (info && info.ip) || "",
+    dialIp: (info && info.dialIp) || "",
     lastSeen: ts ? new Date(ts).toISOString() : "",
     ageSeconds: ageMs === null ? null : Math.round(ageMs / 1000),
     onlineWindowSeconds: Math.round(EXECUTOR_ONLINE_MS / 1000)

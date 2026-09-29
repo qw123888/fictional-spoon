@@ -282,9 +282,14 @@ function renderExecutor(phone) {
   if (!tag) return;
   const ex = (phone && phone.executor) || {};
   const via = phone && phone.dialVia === "pc" ? "pc" : "site";
+  // dialIp = 执行器自己探测的"直连外网时的 IP"，也就是真正要填进 Spug 白名单的那个；
+  // ex.ip 是它连网站时的 IP（走代理的话会是另一条线路），只能当参考。
+  const dialIp = ex.dialIp || "";
+  const beatIp = ex.ip || "";
+  const ipText = dialIp ? `拨号出口 IP ${dialIp}` : beatIp ? `心跳 IP ${beatIp}` : "";
   const age = ex.ageSeconds === null || ex.ageSeconds === undefined ? "" : ex.ageSeconds < 90 ? `${ex.ageSeconds} 秒前` : `${Math.round(ex.ageSeconds / 60)} 分钟前`;
   if (ex.online) {
-    tag.textContent = `执行器：在线${ex.ip ? ` · 出口 IP ${ex.ip}` : ""}`;
+    tag.textContent = `执行器：在线${ipText ? ` · ${ipText}` : ""}`;
     tag.className = "pill on";
   } else if (ex.seen) {
     tag.textContent = `执行器：离线（${age}在线过）`;
@@ -294,14 +299,19 @@ function renderExecutor(phone) {
     tag.className = "pill";
   }
   if (!hint) return;
+  const ipLine = dialIp
+    ? `拨号出口 IP：${dialIp}（要填进 Spug 白名单的就是这个）`
+    : beatIp
+      ? `心跳 IP：${beatIp}（执行器连网站用的线路，可能不是拨号那条；拨号出口 IP 还没探测到）`
+      : "";
   if (via !== "pc") {
     hint.textContent = ex.online
-      ? `电脑端执行器在线（${ex.host || "本机"}${ex.ip ? `，出口 IP ${ex.ip}` : ""}），但当前拨打方式是「网站直拨」——白名单场景要在这里切过去并保存。`
+      ? `电脑端执行器在线（${ex.host || "本机"}${ipLine ? `，${ipLine}` : ""}），但当前拨打方式是「网站直拨」——白名单场景要在这里切过去并保存。`
       : "当前拨打方式是「网站直拨」，电脑端执行器没有连接（Spug 绑了 IP 白名单时需要切到「电脑端拨号」并启动监听器）。";
     return;
   }
   hint.textContent = ex.online
-    ? `正在由电脑端拨号（${ex.host || "本机"}${ex.ip ? `，出口 IP ${ex.ip}` : ""}）。这个 IP 必须出现在 Spug 的 IP 白名单里。`
+    ? `正在由电脑端拨号（${ex.host || "本机"}${ipLine ? `，${ipLine}` : ""}）。`
     : "电脑端执行器没在线：电话会排在队列里等着，等监听器（start.bat）启动后 3 秒内就会拨出去。";
 }
 

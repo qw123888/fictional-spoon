@@ -231,12 +231,16 @@ export async function handleApi(request, env = {}) {
       const doClaim = url.searchParams.get("claim") !== "0" && mode === "pc";
       const limit = Math.max(1, Math.min(20, Number(url.searchParams.get("limit") || 5) || 5));
       const got = doClaim ? await claimTasks(store, { limit }) : { tasks: [], depth: await outboxDepth(store) };
+      // 执行器自己探测的"拨号出口 IP"（它直连外网时的 IP，也就是要填进 Spug 白名单的那个），
+      // 和 ip（它连网站时的 IP，可能被代理换成另一条线路）不是一回事。
+      const dialIp = String(url.searchParams.get("dial_ip") || "").slice(0, 60);
       // 心跳带节流：执行器几秒一次轮询，不能每次都写 KV（免费额度 1000 写/天）
       await executorHeartbeat(store, {
         host: url.searchParams.get("host") || "",
         version: url.searchParams.get("version") || "",
         poll: limit,
         ip,
+        dialIp,
         hasTasks: got.tasks.length > 0
       });
       return json({
@@ -247,6 +251,7 @@ export async function handleApi(request, env = {}) {
         depth: got.depth,
         executor: await executorStatus(store),
         seenIp: ip,
+        seenDialIp: dialIp,
         // 执行器要的东西：拨号参数 + 只能查余额/查状态的开发者 Token
         spug: {
           baseUrl: cfg.spug.baseUrl,

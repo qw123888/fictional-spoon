@@ -71,6 +71,8 @@ class DialExecutor:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._session_obj: Optional[requests.Session] = None
+        self._dial_ip: str = ""
+        self._dial_ip_at: float = 0.0
         self._lock = threading.Lock()
         self.stats = {"polls": 0, "rounds_with_task": 0, "claimed": 0, "ok": 0,
                       "failed": 0, "errors": 0, "last_poll": 0.0}
@@ -98,9 +100,10 @@ class DialExecutor:
         return bool(self._thread and self._thread.is_alive())
 
     def status(self) -> dict:
+        ip = self.dial_ip()  # 可能在锁外做一次网络探测，别在锁里等
         with self._lock:
             return {"running": self.running, "enabled": self.enabled, "interval": self.interval,
-                    "host": self.host, "last_error": self.last_error, **self.stats}
+                    "host": self.host, "dial_ip": ip, "last_error": self.last_error, **self.stats}
 
     # ---------- 主循环 ----------
     def _log(self, text: str, tag: str = "info"):
@@ -136,8 +139,10 @@ class DialExecutor:
     def fetch_outbox(self, limit: Optional[int] = None, claim: bool = True) -> dict:
         """问网站要任务。返回网站的原始响应（dict）。"""
         n = int(limit or self.batch)
+        ip = self.dial_ip()
         path = (f"/api/outbox?claim={'1' if claim else '0'}&limit={n}"
-                f"&host={quote(self.host)}&version={quote(VERSION)}")
+                f"&host={quote(self.host)}&version={quote(VERSION)}"
+                f"&dial_ip={quote(ip)}")
         return self.bridge._request(path, None, method="GET")
 
     def poll_once(self, limit: Optional[int] = None) -> int:
@@ -226,18 +231,67 @@ class DialExecutor:
                     "detail": msg, "ms": ms, "requestId": request_id, "http": resp.status_code}
 
         # 平台受理 ≠ 真的拨通了：撞上流控时 /xsend 照样回 code 200，
-        # 只有按 request_id 去 /request/query 才看得到 status（2=成功，3=被限流）。
+        # 只有按 request_id 去 /request/query 才看得到 status（0=处理中，2=成功，3=被限流）。
         status = None
         detail = "平台已受理"
         dev_token = str((spug or {}).get("devToken") or "").strip()
         if request_id and dev_token:
-            q = self.query_status(base, dev_token, request_id, timeout)
+            q = self.wait_status(base, dev_token, request_id, timeout)
             status = q.get("status")
             detail = q.get("detail") or detail
-        ok = status is None or status == 2
-        reason = "sent" if ok else f"spug_status_{status}"
-        return {"ok": ok, "reason": reason, "detail": detail, "ms": ms,
+
+        if status is None or status == 2:
+            return {"ok": True, "reason": "sent", "detail": detail, "ms": ms,
+                    "requestId": request_id, "status": status, "http": resp.status_code}
+        if status == 0:
+            # 0 = 平台已受理、正在拨：这一次复核还没接通，不能算失败（否则会误触发备用通道）
+            return {"ok": True, "reason": "spug_pending", "status": 0, "http": resp.status_code, "ms": ms,
+                    "requestId": request_id,
+                    "detail": f"{detail}｜平台已受理并开始拨打，本次复核未确认接通；"
+                              f"可稍后用 request_id={request_id} 再查"}
+        return {"ok": False, "reason": f"spug_status_{status}", "detail": detail, "ms": ms,
                 "requestId": request_id, "status": status, "http": resp.status_code}
+
+    def dial_ip(self, max_age: float = 600.0) -> str:
+        """本机直连（绕开代理）时的出口 IP —— 也就是要填进 Spug 白名单的那个 IP。
+
+        只探测一次并缓存（默认 10 分钟），因为这是唯一一次额外的外网请求；
+        探测失败返回空串，不影响拨号。
+        """
+        now = time.time()
+        if self._dial_ip and (now - self._dial_ip_at) < max_age:
+            return self._dial_ip
+        for url, pick in (("https://ifconfig.me/ip", "text"),
+                          ("http://ip-api.com/json/?fields=query", "query")):
+            try:
+                resp = self._session().get(url, timeout=6, proxies={"http": None, "https": None})
+                if not resp.ok:
+                    continue
+                if pick == "text":
+                    ip = str(resp.text or "").strip().split()[0] if resp.text.strip() else ""
+                else:
+                    data = resp.json()
+                    ip = str((data or {}).get("query") or "").strip()
+                if ip and len(ip) <= 60:
+                    self._dial_ip = ip
+                    self._dial_ip_at = now
+                    return ip
+            except Exception:
+                continue
+        return self._dial_ip
+
+    def wait_status(self, base: str, dev_token: str, request_id: str, timeout: float,
+                    delays=(1.2, 1.5, 2.0)) -> dict:
+        """复核发送状态：0（处理中）时多等几次，直到看到 2/3 或次数用完。"""
+        q = self.query_status(base, dev_token, request_id, timeout)
+        for delay in delays:
+            if q.get("status") not in (0, None):
+                break
+            if q.get("status") is None and "查不到状态明细" not in str(q.get("detail")):
+                break  # 复核本身失败（网络/参数），重试也没意义
+            time.sleep(float(delay))
+            q = self.query_status(base, dev_token, request_id, timeout)
+        return q
 
     def query_status(self, base: str, dev_token: str, request_id: str, timeout: float) -> dict:
         """按 request_id 复核真实发送状态。失败也不抛异常，返回 {status, detail}。"""
@@ -262,8 +316,11 @@ class DialExecutor:
             status = int(status)
         except (TypeError, ValueError):
             status = None
-        text = {2: "已接通", 3: "被平台流控（1 次/分钟、5 次/小时、20 次/天）"}.get(status, f"状态码 {status}")
-        return {"status": status, "detail": f"平台状态：{text}"}
+        text = {0: "处理中（平台已受理，还没接通）",
+                2: "已接通",
+                3: "被平台流控（1 次/分钟、5 次/小时、20 次/天）"}.get(status, f"状态码 {status}")
+        target = str(item.get("target") or "").strip()
+        return {"status": status, "detail": f"平台状态：{text}" + (f"（{target}）" if target else "")}
 
     # ---------- 回报结果 ----------
     def _report(self, task: dict, result: dict) -> dict:
@@ -276,6 +333,7 @@ class DialExecutor:
             "ms": result.get("ms", 0),
             "status": result.get("status"),
             "host": self.host,
+            "dialIp": self.dial_ip(),
         }
         resp = self.bridge._request("/api/outbox/result", payload)
         with self._lock:
@@ -283,7 +341,9 @@ class DialExecutor:
                 self.stats["ok"] += 1
             else:
                 self.stats["failed"] += 1
-        if result.get("ok"):
+        if result.get("ok") and result.get("reason") == "spug_pending":
+            self._log(f"电话已提交平台（还在拨，未确认接通）: {task.get('title', '')} {result.get('detail', '')}".strip(), "info")
+        elif result.get("ok"):
             self._log(f"电话已拨出（电脑端直连）: {task.get('title', '')} {result.get('detail', '')}".strip(), "ok")
         else:
             self._log(f"电脑端拨号失败 [{result.get('reason', '?')}] {result.get('detail', '')}", "warn")

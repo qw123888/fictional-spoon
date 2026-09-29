@@ -715,10 +715,20 @@ async function testPcDialMode() {
   let box = await call("/api/outbox", { headers: { "x-forwarded-for": "182.46.51.186" } });
   eq(box.data.mode, "pc", "队列接口报出 pc 模式");
   eq(box.data.tasks.length, 0, "空队列");
-  eq(box.data.seenIp, "182.46.51.186", "记录下执行器的来源 IP（= 拨号出口 IP 的证据）");
+  eq(box.data.seenIp, "182.46.51.186", "记录下执行器的来源 IP（心跳 IP）");
   eq(box.data.executor.online, true, "心跳后执行器在线");
-  eq(box.data.executor.ip, "182.46.51.186", "执行器 IP 存下来了");
+  eq(box.data.executor.ip, "182.46.51.186", "执行器的心跳 IP 存下来了");
+  eq(box.data.executor.dialIp, "", "没报 dial_ip 时拨号出口 IP 为空（前端回退显示心跳 IP）");
   eq(Boolean(box.data.spug.appKey), true, "把 App Key 下发给执行器（只有带令牌才拿得到）");
+
+  // 执行器自报"直连外网时的出口 IP"（= Spug 白名单要填的那个）：
+  // 注意它和心跳 IP 是两条线路（心跳走代理时会是别的地址）
+  box = await call("/api/outbox?claim=0&dial_ip=203.0.113.9", { headers: { "x-forwarded-for": "2a03:90c0:2c7:1::11a" } });
+  eq(box.data.seenDialIp, "203.0.113.9", "接口把 dial_ip 回显出来");
+  eq(box.data.executor.dialIp, "203.0.113.9", "拨号出口 IP 存进执行器状态");
+  eq(box.data.executor.ip, "2a03:90c0:2c7:1::11a", "心跳 IP 和拨号出口 IP 分开记，互不覆盖");
+  h = await call("/api/health");
+  eq(h.data.phone.executor.dialIp, "203.0.113.9", "/api/health 也带拨号出口 IP");
 
   // --- 3) 电脑端在线时拨号请求只排队，网站绝不自己打 ---
   r = await call("/api/test-call", { method: "POST", body: { title: "电脑端测试电话" } });
@@ -744,16 +754,18 @@ async function testPcDialMode() {
   let res = await call("/api/outbox/result", {
     method: "POST",
     headers: { "x-forwarded-for": "182.46.51.186" },
-    body: { id: taskId, ok: true, reason: "sent", detail: "平台状态：已接通", requestId: "REQ_PC_1", ms: 1234, host: "PC-A" }
+    body: { id: taskId, ok: true, reason: "sent", detail: "平台状态：已接通", requestId: "REQ_PC_1", ms: 1234, host: "PC-A", dialIp: "203.0.113.9" }
   });
   eq(res.data.ok, true, "回报被受理");
   eq(res.data.dialed, true, "记为拨号成功");
   eq(res.data.depth, 0, "任务已出队");
+  eq(res.data.dialIp, "203.0.113.9", "回报里的拨号出口 IP 原样带回去");
 
   h = await call("/api/health");
   eq(h.data.phone.last.ok, true, "电话健康快照来自执行器回报");
   eq(h.data.phone.last.via, "pc", "健康快照标明是电脑端拨的");
-  eq(h.data.phone.last.ip, "182.46.51.186", "健康快照记下拨号出口 IP");
+  eq(h.data.phone.last.ip, "182.46.51.186", "健康快照记下心跳 IP");
+  eq(h.data.phone.last.dialIp, "203.0.113.9", "健康快照以执行器自报的拨号出口 IP 为准");
   eq(h.data.phone.last.requestId, "REQ_PC_1", "请求 id 也记下了");
 
   let logs = await call("/api/logs?limit=3");
@@ -773,8 +785,25 @@ async function testPcDialMode() {
   await call("/api/outbox?claim=1");
   mock.phoneCalls.length = 0;
 
-  // --- 8) 执行器报失败 → 走备用通道 + 健康记为失败 ---
+  // --- 8) 执行器报"平台已受理但还在拨"（spug_pending）→ 算成功，绝不能触发备用通道 ---
   await setConfig({ fallback: { enabled: true, webhookUrl: "https://hook.local/notify" } });
+  mock.webhookCalls.length = 0;
+  r = await call("/api/test-call", { method: "POST", body: { title: "还在拨的一通" } });
+  box = await call("/api/outbox?claim=1");
+  eq(box.data.tasks.length, 1, "领到 pending 用例的任务");
+  res = await call("/api/outbox/result", {
+    method: "POST",
+    body: { id: box.data.tasks[0].id, ok: true, reason: "spug_pending", status: 0, requestId: "REQ_PEND",
+            detail: "平台状态：处理中（平台已受理，还没接通）", ms: 900 }
+  });
+  eq(res.data.dialed, true, "pending 记为成功（平台已受理）");
+  eq(res.data.fallback, null, "pending 不触发备用 Webhook（否则会被误报成失败）");
+  eq(mock.webhookCalls.length, 0, "Webhook 一条都没收到");
+  h = await call("/api/health");
+  eq(h.data.phone.last.ok, true, "健康快照不算失败");
+  eq(h.data.phone.last.reason, "spug_pending", "原因如实写明还在处理中");
+
+  // --- 9) 执行器报失败 → 走备用通道 + 健康记为失败 ---
   r = await call("/api/test-call", { method: "POST", body: { title: "注定失败的一通" } });
   box = await call("/api/outbox?claim=1");
   eq(box.data.tasks.length, 1, "领到失败用例的任务");
@@ -790,7 +819,7 @@ async function testPcDialMode() {
   logs = await call("/api/logs?limit=5");
   eq(logs.data.items.some((x) => x.source.endsWith("#fallback")), true, "备用通道那条也进了日志");
 
-  // --- 9) 执行器不在线时排队会如实说 ---
+  // --- 10) 执行器不在线时排队会如实说 ---
   ENV.NOTIFY_KV.map.delete("executor:v1");
   r = await call("/api/test-call", { method: "POST", body: { title: "没人接的一通" } });
   eq(r.data.queued, true, "照样入队（等执行器上线）");
@@ -798,20 +827,20 @@ async function testPcDialMode() {
   eq(r.data.reason, "no_executor", "原因写明没有执行器");
   await call("/api/outbox?claim=1"); // 清掉这条，别影响后面的用例
 
-  // --- 10) 鉴权 ---
+  // --- 11) 鉴权 ---
   r = await call("/api/outbox", { token: "" });
   eq(r.status, 401, "队列接口必须带令牌");
   r = await call("/api/outbox/result", { method: "POST", token: "", body: { id: "x", ok: true } });
   eq(r.status, 401, "回报接口必须带令牌");
 
-  // --- 11) 切回网站直拨：队列空着，网站自己打 ---
+  // --- 12) 切回网站直拨：队列空着，网站自己打 ---
   await setConfig({ phone: { dialVia: "site" }, fallback: { enabled: false } });
   mock.reset();
   r = await call("/api/test-call", { method: "POST", body: { title: "回到网站直拨" } });
   eq(r.data.queued, false, "切回 site 后不再排队");
   eq(mock.phoneCalls.length, 1, "网站自己打了一次");
 
-  // --- 12) site 模式下执行器就算来问，也不许领走队列里的任务 ---
+  // --- 13) site 模式下执行器就算来问，也不许领走队列里的任务 ---
   await setConfig({ phone: { dialVia: "pc" } });
   await call("/api/signal", { method: "POST", body: { title: "留给 pc 模式的任务", content: "x" } });
   await setConfig({ phone: { dialVia: "site" } });
