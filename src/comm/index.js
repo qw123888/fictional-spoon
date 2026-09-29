@@ -321,7 +321,7 @@ export class CommModule {
     const { ok, skipped, reason, detail, signal, started, source, kind, requestId, attempts, window: win, fingerprint, force, fallback } = info;
     const ms = Date.now() - started;
     const item = await this.log.push({
-      level: skipped ? "skip" : ok ? "ok" : "error",
+      level: skipped ? "skip" : ok ? "ok" : info.queued ? "warn" : "error",
       title: signal.title || "",
       content: signal.content || "",
       source,

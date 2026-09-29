@@ -243,9 +243,10 @@ class DialExecutor:
         if status is None or status == 2:
             return {"ok": True, "reason": "sent", "detail": detail, "ms": ms,
                     "requestId": request_id, "status": status, "http": resp.status_code}
-        if status == 0:
-            # 0 = 平台已受理、正在拨：这一次复核还没接通，不能算失败（否则会误触发备用通道）
-            return {"ok": True, "reason": "spug_pending", "status": 0, "http": resp.status_code, "ms": ms,
+        if status in (0, 1):
+            # 0=排队、1=拨打中：平台已受理并开始打电话，只是复核这几秒没接通。
+            # 这不能算失败（否则会误触发备用通道/误报"没打出去"）。
+            return {"ok": True, "reason": "spug_pending", "status": status, "http": resp.status_code, "ms": ms,
                     "requestId": request_id,
                     "detail": f"{detail}｜平台已受理并开始拨打，本次复核未确认接通；"
                               f"可稍后用 request_id={request_id} 再查"}
@@ -281,11 +282,11 @@ class DialExecutor:
         return self._dial_ip
 
     def wait_status(self, base: str, dev_token: str, request_id: str, timeout: float,
-                    delays=(1.2, 1.5, 2.0)) -> dict:
-        """复核发送状态：0（处理中）时多等几次，直到看到 2/3 或次数用完。"""
+                    delays=(1.2, 1.5, 2.0, 2.5, 3.0)) -> dict:
+        """复核发送状态：0（排队）/1（拨打中）时多等几次，直到看到 2/3 或次数用完。"""
         q = self.query_status(base, dev_token, request_id, timeout)
         for delay in delays:
-            if q.get("status") not in (0, None):
+            if q.get("status") not in (0, 1, None):
                 break
             if q.get("status") is None and "查不到状态明细" not in str(q.get("detail")):
                 break  # 复核本身失败（网络/参数），重试也没意义
@@ -316,7 +317,8 @@ class DialExecutor:
             status = int(status)
         except (TypeError, ValueError):
             status = None
-        text = {0: "处理中（平台已受理，还没接通）",
+        text = {0: "排队中（平台已受理）",
+                1: "拨打中（电话正在响，还没确认接通）",
                 2: "已接通",
                 3: "被平台流控（1 次/分钟、5 次/小时、20 次/天）"}.get(status, f"状态码 {status}")
         target = str(item.get("target") or "").strip()

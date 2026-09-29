@@ -825,6 +825,8 @@ async function testPcDialMode() {
   eq(r.data.queued, true, "照样入队（等执行器上线）");
   eq(r.data.ok, false, "没有执行器在线 → 不算成功");
   eq(r.data.reason, "no_executor", "原因写明没有执行器");
+  logs = await call("/api/logs?limit=5");
+  eq(logs.data.items[0].level, "warn", "只是排队等着，不该记成 error");
   await call("/api/outbox?claim=1"); // 清掉这条，别影响后面的用例
 
   // --- 11) 鉴权 ---

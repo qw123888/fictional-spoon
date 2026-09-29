@@ -178,7 +178,7 @@ py -3 notify_bridge.py --signal "标题" "内容"        # 发一条普通信号
 - 拨号请求**不走代理**（执行器里写死 `trust_env=False` + `proxies={None}`）；其它流量（监听器 → 网站）照旧按 `notify.use_proxy` 走。
 - 执行器没在线时，网站**不会**谎报成功：排队返回 `reason: "no_executor"`、面板提示「已排队，等执行器上线」，任务留在队列里（租约 90 秒，过期自动可再领）。
 - 队列深度上限 100 条；网站自己拨（`site` 模式）时执行器只发心跳、不领任务、不拨号（切回 `pc` 模式，残留任务照样会被拨出去）。
-- 拨完会按 `request_id` 复核真实状态（`/request/query`）：`2`=已接通、`3`=被平台流控（记为失败）、`0`=平台已受理还在拨 —— 这种情况**算成功但如实标注**（`reason: "spug_pending"`），不会误触发备用 Webhook；复核会等几秒再下结论，别把"正在拨"当成"没拨出去"。
+- 拨完会按 `request_id` 复核真实状态（`/request/query`，实测语义）：`0`=排队中（刚受理）、`1`=拨打中（电话正在响、还没接通）、`2`=已接通（`reason: "[A]success"`）、`3`=被平台流控。`0/1` 都**算成功但如实标注**（`reason: "spug_pending"`，日志文案"平台状态：排队中/拨打中"），不会误触发备用 Webhook；复核会隔几秒连查几次（最长约 10 秒）再下结论，别把"正在拨"当成"没拨出去"。
 - 电脑端手动自测（不进队列、直接拨一通）：
   ```bash
   py -3 dial_executor.py --config config.json --status   # 看队列 / 执行器状态 / 本机拨号出口 IP
@@ -371,7 +371,8 @@ comm.register(new SmsAdapter(cfg));   // 非 ChannelAdapter 实例会被拒绝
 | 面板显示 `执行器：未连接` / 返回 `reason: "no_executor"` | 监听器的拨号执行器没跑起来。启动 `start.bat`（日志应有「电脑端拨号执行器已启动」）；若没有，检查 `config.json → notify.dial_executor` 是不是 `false`，以及 `dial_executor.py` 是否和监听器在同一目录。任务不会丢，执行器上线后几秒内就会拨出去。 |
 | 面板显示 `执行器：离线（N 分钟前在线过）` | 电脑端进程退出了（关掉窗口 / 关机）。重新启动即可；队列里的任务会等它回来。 |
 | `spug_403` + `请求IP: 1.2.3.4 不在IP白名单内`（电脑端拨号也报） | 这台电脑现在的出网 IP 和白名单里写的不一样（换了网络 / 代理客户端在抢路由）。看面板标签里的「拨号出口 IP」，把它更新进 Spug 白名单。注意执行器**不走代理**，代理开着也不影响它的出口 IP。 |
-| 日志里 `spug_pending` / `平台状态：处理中` | 不是错误：Spug 已受理并开始拨打，只是复核那一瞬间还没接通（`status 0`）。电话通常几秒后就通了；不会触发备用通道。若长时间都是 pending，用 `request_id` 去 Spug 控制台或 `/request/query` 复查。 |
+| 日志里 `spug_pending` / `平台状态：排队中` 或 `拨打中` | 不是错误：Spug 已受理并开始拨打，只是复核那几秒还没接通（`status 0/1`）。电话通常几秒后就通（`status 2`）；不会触发备用通道。若长时间都是 pending，用 `request_id` 去 Spug 控制台或 `/request/query` 复查。 |
+| 执行器不在线时点测试电话：`no_executor`（日志级别 warn） | 已排队，等执行器上线（开机/启动 `start.bat`）就会自动拨出，不需要重新点。队列上限 100 条。 |
 | `spug_400` + `因应用key限制，无可用通道` | 这个 App Key 的通道权限范围里没有你在 `channel` 里指定的通道。到 Spug 控制台改该 App Key 的授权通道，或换一个 Key。 |
 | 接口报 `Invalid data type for parse` | 请求体带了 **UTF-8 BOM**（PowerShell `Set-Content -Encoding UTF8` 会写 BOM）。用无 BOM 的 UTF-8 重发即可；页面与 Node/Python 代码不受影响。 |
 | 电话打了但对方没接到 / `status=3` `此号码触发流控` | 撞上 Spug 语音通道自身的限流：**1 通/分钟、5 通/小时、20 通/天**（按号码）。此时 `xsend` 仍返回 `code:200`，只有查发送状态才看得到 —— 所以站点侧默认值已按此对齐（见 §4），撞限流的那通**不计费**。 |
