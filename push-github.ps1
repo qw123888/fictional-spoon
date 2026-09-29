@@ -64,10 +64,15 @@ Say "推送中（第一次推空仓库会创建 main 分支）…" "Cyan"
 $url = "https://x-access-token:$Token@github.com/$Repo.git"
 
 # 用内联 URL 推送，避免令牌落到 .git/config
-git push $url "HEAD:refs/heads/$Branch"
+$ErrorActionPreference = "Continue"   # git 会往 stderr 写进度/报错，别让它当成异常炸掉
+$pushOut = git push $url "HEAD:refs/heads/$Branch" 2>&1 | Out-String
 $code = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
 
 if ($code -ne 0) {
+  Say ""
+  Say "git 输出：" "DarkGray"
+  ($pushOut.Trim() -split "`n") | ForEach-Object { Say "  $_" "DarkGray" }
   Say ""
   Say "推送失败（git exit $code）。常见原因：" "Red"
   Say "  · 令牌无效 / 过期 / 没勾 Contents 权限" "Red"
@@ -75,6 +80,7 @@ if ($code -ne 0) {
   Say "  · 网络被墙：GitHub 域名 DNS 抽风，可在 hosts 里指 20.27.177.113" "Red"
   exit $code
 }
+($pushOut.Trim() -split "`n") | Select-Object -Last 1 | ForEach-Object { Say "  $_" "DarkGray" }
 
 # ---------- 4. 收尾 ----------
 $plain = "https://github.com/$Repo.git"
