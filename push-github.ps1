@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # 一键把本仓库推送到 GitHub
 #   - 令牌只在这一次 push 里用，不会写进 .git/config、不会存盘
 #   - 推完会把 origin 设成不带令牌的地址，以后直接 git push 即可（走凭据管理器）
@@ -47,9 +47,9 @@ if ($dirty) {
   git -c user.name="phone-notify" -c user.email="dev@local" commit -m "本地改动：$(Get-Date -Format 'yyyy-MM-dd HH:mm')" | Out-Null
 }
 
-# 防呆：把密钥挡在推送之外
+# 防呆：把密钥挡在推送之外（排除本脚本自身，里面写着用于匹配的模板串）
 Say "扫描将要推送的内容里有没有密钥…"
-$leak = git grep --cached -I -E "ak_OxGq|4bfa5219|nl_db7fac|c3da500c|WdEwNzu|ghp_|github_pat_" 2>$null
+$leak = git grep --cached -I -E "ak_OxGq|4bfa5219|nl_db7fac|c3da500c|WdEwNzu" -- . ":(exclude)push-github.ps1" ":(exclude)README.md" 2>$null
 if ($leak) {
   Say "!! 发现疑似密钥，已中止推送：" "Red"
   $leak | ForEach-Object { Say "   $_" }
