@@ -158,6 +158,17 @@ py -3 notify_bridge.py --signal "标题" "内容"        # 发一条普通信号
 ⚠ **不要拖 `.dev.vars`、`local/data/`、`node_modules/`** —— 里面是真实密钥；
 `git archive` 出来的 `上传包.zip` 只含该传的文件，解压后拖它就行。
 
+**方式三（`git push` 连不上 github.com 时用）**：双击 `push-github.bat` 报
+`Failed to connect to github.com:443` / `Connection was reset` 时，改用 REST API 推送：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File push-github-api.ps1 -Token ghp_xxx
+```
+
+它走 `api.github.com`（不依赖 github.com 的 443 直连），只把**和远端不同的文件**用
+blobs → tree → commit → 更新分支 的方式推上去，同样会做密钥扫描。注意：它不改本地 HEAD，
+所以本地提交历史和远端是两条并行线，下次用 `git push` 前先 `git pull --rebase`。
+
 ### 方式 A（推荐，推上去就自动部署）：Cloudflare 连你的 GitHub 仓库
 
 1. Cloudflare 控制台 → **Workers & Pages** → 创建 → Workers → **连接到 Git** → 选 `fictional-spoon`，分支 `main`
@@ -286,6 +297,7 @@ comm.register(new SmsAdapter(cfg));   // 非 ChannelAdapter 实例会被拒绝
 | 剩余语音显示「查询失败 / 未配置开发者 Token」 | 查余额和发送状态**只能**用 Spug 控制台的「开发者 Token」（App Key 不行）：填到控制台「电话接口参数 → 开发者Token」，或 `wrangler secret put SPUG_DEV_TOKEN`。 |
 | 剩余语音 0 分钟 | 语音是计费通道，去 Spug 控制台充值或买语音资源包；控制台会在 ≤3 分钟时弹红色提醒。 |
 | 电脑端 401 | `config.json → notify.token` 与站点令牌不一致。 |
+| `git push` 报 `Failed to connect to github.com:443 ... Could not connect to server` / `Connection was reset` | 本机到 `github.com:443` 被间歇性重置（DNS 抽风或链路阻断），**和令牌无关**：`api.github.com` 正常就说明令牌没问题。三种办法：① 改用 `push-github-api.ps1`（走 `api.github.com`，见 §5 第 0 步方式三）；② 在 `%WINDIR%\System32\drivers\etc\hosts` 里写 `<可用IP> github.com`（可用 IP：`140.82.113.3`、`140.82.114.3`、`20.27.177.113`）+ `ipconfig /flushdns`；③ 网页手动上传。 |
 | 时间段不对 | 检查 `window.tz`（默认 `Asia/Shanghai`）、`mode`（`inside`=只在时段内拨 / `outside`=只在时段外拨）、星期与区间；跨天写 `["22:00","06:00"]`。 |
 
 ---
