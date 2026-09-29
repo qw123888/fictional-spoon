@@ -8,14 +8,10 @@ directory = "./public"
 binding = "ASSETS"
 
 # KV 命名空间：持久化配置 / 去重 / 限流计数 / 健康快照。
-# 不配也能部署和运行（状态落在内存里，重启或跨实例会丢），配了更稳。
-# 开启步骤：
-#   1) npx wrangler kv namespace create NOTIFY_KV
-#   2) 把它返回的 id 填进下面（或在 Cloudflare 控制台 Worker → Settings → Bindings 里加一个 KV 变量名 NOTIFY_KV）
-#   3) 把下面三行的 # 去掉，再重新部署
-# [[kv_namespaces]]
-# binding = "NOTIFY_KV"
-# id = "填命名空间ID"
+# 配了才会持久化（*.workers.dev 上 Cache API 不生效，没绑 KV 时配置只能放内存、重启就丢）。
+[[kv_namespaces]]
+binding = "NOTIFY_KV"
+id = "8e6e7c1d2b2b47cba49e1911275903d2"
 
 [vars]
 # 非敏感默认值可以写这里；密钥请用：wrangler secret put SPUG_APP_KEY

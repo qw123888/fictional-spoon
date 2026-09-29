@@ -177,11 +177,11 @@ blobs → tree → commit → 更新分支 的方式推上去，同样会做密�
 
 1. Cloudflare 控制台 → **Workers & Pages** → 创建 → Workers → **连接到 Git** → 选 `fictional-spoon`，分支 `main`
 2. 构建命令留空，部署命令 `npx wrangler deploy`（仓库根有 `wrangler.toml`，CF 会自动识别）
-   仓库里的 `[[kv_namespaces]]` 默认是**注释掉的**，所以第一次就能部署成功。
-   **但配置要想存住，必须补上 KV**（`*.workers.dev` 上 Cache API 不生效，不绑 KV 就存不住）：
-   控制台 **Storage & Databases → KV → Create namespace**（名字随意，如 `phone-notify-kv`）→ 复制 **ID**
-   → 填进 `wrangler.toml` 并去掉那三行的 `#`，再 push 一次
-   （不想改文件就在 Worker → Settings → Bindings → Add → KV namespace，变量名填 `NOTIFY_KV`，**改完立即生效，不用重新部署**；代码两种绑定名都认）
+   仓库里的 `[[kv_namespaces]]` **已经填好了**（binding `NOTIFY_KV`，id `8e6e7c1d2b2b47cba49e1911275903d2`），
+   推上去就会自动绑定，配置能持久化（`*.workers.dev` 上 Cache API 不生效，不绑 KV 就存不住）。
+   换账号/换命名空间时把那个 `id` 换成自己的 **Storage & Databases → KV** 里的 Namespace ID 再 push；
+   也可以不改文件，直接在 Worker → Settings → Bindings → Add → KV namespace 加一个变量名 `NOTIFY_KV` 的绑定
+   （**改完立即生效，不用重新部署**；代码两种绑定名都认）。
 3. Worker → **Settings → Variables and Secrets** 加三项，类型选 **Secret**：
    `SPUG_APP_KEY`、`SPUG_DEV_TOKEN`、`SIGNAL_TOKEN`（`SIGNAL_TOKEN` 自己定，电脑端用同一个）
 4. 部署完拿到 `https://phone-notify.<你的子域>.workers.dev`
@@ -218,8 +218,10 @@ Workers & Pages → Pages → 连接到 Git → 框架预设 **None**、构建�
   Cloudflare 文档明确写了 **Cache API 在 `*.workers.dev` 上不生效**（自定义域名 / Pages 才生效），
   所以跑在 `xxx.workers.dev` 又没绑 KV 时，后端会如实报告成「内存（临时）」，
   点「保存配置」返回 `ok:false / not_persisted`，控制台顶部弹红条告诉你绑 KV 的三步，
-  而不是假装保存成功。绑 KV 不需要改代码、不需要重新部署：
-  ① **Storage & Databases → KV → Create namespace**（名字随意，如 `phone-notify-kv`）；
+  而不是假装保存成功。**本仓库的 `wrangler.toml` 已经带上了 KV 绑定**
+  （binding `NOTIFY_KV`，id `8e6e7c1d2b2b47cba49e1911275903d2`），推上去后 `/api/health` 里
+  `storage.backend` 应显示 `cloudflare-kv`。换命名空间的话：
+  ① **Storage & Databases → KV → Create namespace**（名字随意）；
   ② 本 Worker → **Settings → Bindings → Add → KV namespace**，Variable name 填 `NOTIFY_KV`，选刚建的空间；
   ③ 回控制台再点一次「保存配置」。
 - **浏览器草稿兜底**：每次点保存都会把配置存一份到本浏览器 `localStorage`。服务器端存不住时，
