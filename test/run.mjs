@@ -190,7 +190,7 @@ async function testAuthAndConfig() {
   eq(good.data.config.spug.devToken.includes("***"), true, "响应里开发者 Token 也被掩码");
   eq(good.data.hasDevToken, true, "hasDevToken = true");
 
-  await setConfig({ guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50 }, spug: { appKey: "ak_test_key" } });
+  await setConfig({ guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50, maxPerDay: 500 }, spug: { appKey: "ak_test_key" } });
   const after = await call("/api/config");
   eq(after.data.config.guard.maxPerHour, 50, "配置保存生效（maxPerHour=50）");
 
@@ -208,7 +208,7 @@ async function testSignalPipeline() {
 
   // 3.1 时间段外 → 跳过，不打接口
   mock.reset();
-  await setConfig({ enabled: true, window: { mode: "inside", tz, days: [tomorrow], ranges: [["00:00", "23:59"]] }, guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50 }, fallback: { enabled: false } });
+  await setConfig({ enabled: true, window: { mode: "inside", tz, days: [tomorrow], ranges: [["00:00", "23:59"]] }, guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50, maxPerDay: 500 }, fallback: { enabled: false } });
   const skipped = await call("/api/signal", { method: "POST", body: { title: "时间段外", content: "不应拨号", source: "test" } });
   eq(skipped.data.skipped, true, "时间段外 → skipped=true");
   eq(skipped.data.reason, "outside_window", "原因 = outside_window");
@@ -241,7 +241,7 @@ async function testSignalPipeline() {
   // 3.5 去重
   mock.reset();
   await resetQuota();
-  await setConfig({ guard: { dedupeSeconds: 120, minIntervalSeconds: 0, maxPerHour: 50 } });
+  await setConfig({ guard: { dedupeSeconds: 120, minIntervalSeconds: 0, maxPerHour: 50, maxPerDay: 500 } });
   const a = await call("/api/signal", { method: "POST", body: { title: "重复消息", content: "同一条", source: "discord", id: "dup-1" } });
   const b = await call("/api/signal", { method: "POST", body: { title: "重复消息", content: "同一条", source: "discord", id: "dup-1" } });
   eq(a.data.ok, true, "第一条去重信号发送成功");
@@ -254,7 +254,7 @@ async function testSignalPipeline() {
   // 3.6 最小间隔
   mock.reset();
   await resetQuota();
-  await setConfig({ guard: { dedupeSeconds: 0, minIntervalSeconds: 300, maxPerHour: 50 } });
+  await setConfig({ guard: { dedupeSeconds: 0, minIntervalSeconds: 300, maxPerHour: 50, maxPerDay: 500 } });
   const first = await call("/api/signal", { method: "POST", body: { title: "间隔1", content: "a", source: "test" } });
   const second = await call("/api/signal", { method: "POST", body: { title: "间隔2", content: "b", source: "test" } });
   eq(first.data.ok, true, "第一通电话成功");
@@ -271,7 +271,27 @@ async function testSignalPipeline() {
   eq(third.data.reason, "hourly_quota", "第三通 → hourly_quota");
   eq(mock.phoneCalls.length, 2, "配额上限 2 生效");
 
-  // 3.8 参数校验
+  // 3.8 每天配额（对齐 Spug 语音 20 通/天）
+  mock.reset();
+  await resetQuota();
+  await setConfig({ guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 500, maxPerDay: 2 } });
+  await call("/api/signal", { method: "POST", body: { title: "日配额1", content: "1", source: "test" } });
+  await call("/api/signal", { method: "POST", body: { title: "日配额2", content: "2", source: "test" } });
+  const overDay = await call("/api/signal", { method: "POST", body: { title: "日配额3", content: "3", source: "test" } });
+  eq(overDay.data.reason, "daily_quota", "超出每天上限 → daily_quota");
+  eq(mock.phoneCalls.length, 2, "每天上限 2 生效");
+  const h = await call("/api/health");
+  eq(h.data.guard.usedToday, 2, "health 反映今日已拨 2 通");
+  eq(h.data.guard.maxPerDay, 2, "health 反映每天上限");
+
+  // 3.9 默认值对齐 Spug 流控
+  const defaults = normalizeConfig({});
+  eq(defaults.guard.minIntervalSeconds, 60, "默认最小间隔 60s（Spug 1 通/分钟）");
+  eq(defaults.guard.maxPerHour, 5, "默认每小时 5 通（Spug 5 通/小时）");
+  eq(defaults.guard.maxPerDay, 20, "默认每天 20 通（Spug 20 通/天）");
+
+  // 3.10 参数校验
+  await setConfig({ guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50, maxPerDay: 500 } });
   const invalid = await call("/api/signal", { method: "POST", body: {} });
   eq(invalid.data.reason, "invalid_signal", "空信号 → invalid_signal");
 }
@@ -283,7 +303,7 @@ async function testFailureAndFallback() {
   await setConfig({
     enabled: true,
     window: { mode: "inside", tz, days: [today], ranges: [["00:00", "23:59"]] },
-    guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50 },
+    guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50, maxPerDay: 500 },
     phone: { retry: 2, timeoutMs: 5000 },
     fallback: { enabled: false }
   });
@@ -372,7 +392,7 @@ async function testFailureAndFallback() {
 
 async function testHealthAndLogs() {
   console.log("\n[5] 健康状态与日志");
-  await setConfig({ fallback: { enabled: false }, guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50 } });
+  await setConfig({ fallback: { enabled: false }, guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50, maxPerDay: 500 } });
   const health = await call("/api/health");
   eq(health.data.ok, true, "GET /api/health 正常");
   eq(health.data.storage.backend, "cloudflare-kv", "识别出 KV 后端");

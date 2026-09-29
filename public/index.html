@@ -125,6 +125,8 @@
         <label class="field"><span>去重窗口(秒)</span><input id="cfg-dedupe" type="number" min="0" max="86400"></label>
         <label class="field"><span>最小间隔(秒)</span><input id="cfg-mininterval" type="number" min="0" max="3600"></label>
         <label class="field"><span>每小时上限</span><input id="cfg-maxhour" type="number" min="1" max="500"></label>
+        <label class="field"><span>每天上限</span><input id="cfg-maxday" type="number" min="1" max="2000"></label>
+        <p class="hint">Spug 语音通道自身限流：<b>1 通/分钟、5 通/小时、20 通/天</b>（超了会被平台静默拦截，接口仍返回成功）。默认值已按此对齐。</p>
       </div>
     </div>
 

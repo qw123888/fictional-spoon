@@ -127,7 +127,7 @@ export class CommModule {
     if (!force) {
       guard = await checkGuard(
         { store: this.store, guard: cfg.guard },
-        { fingerprint: fp, nowMs: Date.now(), hourKey: win.now.hourKey }
+        { fingerprint: fp, nowMs: Date.now(), hourKey: win.now.hourKey, dayKey: win.now.dateKey }
       );
       if (!guard.allow) {
         return this._finish({
@@ -137,7 +137,7 @@ export class CommModule {
       }
       await commitGuard(
         { store: this.store, guard: cfg.guard },
-        { fingerprint: fp, nowMs: Date.now(), hourKey: win.now.hourKey }
+        { fingerprint: fp, nowMs: Date.now(), hourKey: win.now.hourKey, dayKey: win.now.dateKey }
       );
     }
 
@@ -185,7 +185,7 @@ export class CommModule {
   async health() {
     const cfg = await this.config();
     const win = evaluateWindow(cfg);
-    const guard = await guardStatus({ store: this.store, guard: cfg.guard }, { hourKey: win.now.hourKey });
+    const guard = await guardStatus({ store: this.store, guard: cfg.guard }, { hourKey: win.now.hourKey, dayKey: win.now.dateKey });
     const phone = await this.store.get(PHONE_HEALTH_KEY, null);
     const token = this.env.SIGNAL_TOKEN ? true : Boolean(await this.store.get("auth:token", ""));
     return {

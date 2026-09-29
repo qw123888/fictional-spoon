@@ -93,7 +93,7 @@ function renderHealth(h) {
   $("status-cards").innerHTML = [
     card("当前时间", `${h.now.iso} <span style="color:var(--fg-dim)">${WEEKDAYS[h.now.weekday] || ""}</span>`, `时区 ${h.now.tz}`, "", "big"),
     card("自动通知时间段", winValue, win.detail || "", winCls, win.active ? "big" : "big"),
-    card("本小时通话", `${guard.usedThisHour ?? 0} / ${guard.maxPerHour ?? "-"}`, guard.lastSendAt ? `上次：${fmtTime(guard.lastSendAt)}` : "本小时尚未拨打", "", "count"),
+    card("已拨打通话", `${guard.usedToday ?? 0} / ${guard.maxPerDay ?? "-"} <span style="color:var(--fg-dim)">(今天)</span>`, `本小时 ${guard.usedThisHour ?? 0}/${guard.maxPerHour ?? "-"}${guard.lastSendAt ? ` · 上次：${fmtTime(guard.lastSendAt)}` : " · 本小时尚未拨打"}`, "", "count"),
     card("剩余语音", balValue, balDetail, balCls, "count"),
     card("电话接口", phoneValue, lastDetail, phone.configured ? "" : "warn"),
     card("通知总开关", h.enabled ? "已开启" : "已关闭", h.enabled ? "收到信号会按时间段拨打" : "仅 force 信号可穿透", h.enabled ? "ok" : "warn"),
@@ -102,7 +102,7 @@ function renderHealth(h) {
 
   $("win-pill").textContent = `时间段：${win.active ? "可拨打" : "暂停"}`;
   $("win-pill").className = `pill ${win.active ? "on" : "off"}`;
-  $("quota-pill").textContent = `本小时 ${guard.usedThisHour ?? 0}/${guard.maxPerHour ?? "-"}`;
+  $("quota-pill").textContent = `今天 ${guard.usedToday ?? 0}/${guard.maxPerDay ?? "-"} · 本小时 ${guard.usedThisHour ?? 0}/${guard.maxPerHour ?? "-"}`;
   $("storage-pill").textContent = `存储：${h.storage.backend === "cloudflare-kv" ? "KV" : "内存"}`;
   $("storage-pill").className = `pill ${h.storage.persistent ? "on" : "off"}`;
   $("live-dot").className = `dot ${phone.configured ? "live" : "bad"}`;
@@ -144,6 +144,7 @@ function fillConfig(cfg) {
   $("cfg-dedupe").value = cfg.guard.dedupeSeconds;
   $("cfg-mininterval").value = cfg.guard.minIntervalSeconds;
   $("cfg-maxhour").value = cfg.guard.maxPerHour;
+  $("cfg-maxday").value = cfg.guard.maxPerDay;
 
   $("cfg-channel").value = cfg.phone.channel;
   $("cfg-targets").value = cfg.phone.targets;
@@ -169,7 +170,8 @@ function collectConfig() {
     guard: {
       dedupeSeconds: Number($("cfg-dedupe").value),
       minIntervalSeconds: Number($("cfg-mininterval").value),
-      maxPerHour: Number($("cfg-maxhour").value)
+      maxPerHour: Number($("cfg-maxhour").value),
+      maxPerDay: Number($("cfg-maxday").value)
     },
     phone: {
       channel: $("cfg-channel").value,

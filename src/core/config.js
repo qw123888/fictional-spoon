@@ -26,11 +26,12 @@ export const DEFAULT_CONFIG = {
     days: [0, 1, 2, 3, 4, 5, 6],   // 0=周日
     ranges: [["08:00", "23:00"]]   // 支持跨天，如 ["23:00","07:00"]
   },
-  // 防轰炸
+  // 防轰炸（默认值按 Spug 语音通道自身的流控来定：1 次/分钟、5 次/小时、20 次/天）
   guard: {
     dedupeSeconds: 60,       // 同一条消息指纹在此秒数内只打一次
-    minIntervalSeconds: 20,  // 两通电话之间最小间隔
-    maxPerHour: 20           // 每小时上限
+    minIntervalSeconds: 60,  // 两通电话之间最小间隔
+    maxPerHour: 5,           // 每小时上限
+    maxPerDay: 20            // 每天上限（Spug 语音每天最多 20 通，超了会被平台静默流控）
   },
   // 电话接口异常时的备用通道（可选，默认关）
   fallback: {
@@ -103,8 +104,9 @@ export function normalizeConfig(input = {}) {
   c.window.ranges = normRanges(c.window.ranges);
 
   c.guard.dedupeSeconds = clampInt(c.guard.dedupeSeconds, 0, 86400, 60);
-  c.guard.minIntervalSeconds = clampInt(c.guard.minIntervalSeconds, 0, 3600, 20);
-  c.guard.maxPerHour = clampInt(c.guard.maxPerHour, 1, 500, 20);
+  c.guard.minIntervalSeconds = clampInt(c.guard.minIntervalSeconds, 0, 3600, 60);
+  c.guard.maxPerHour = clampInt(c.guard.maxPerHour, 1, 500, 5);
+  c.guard.maxPerDay = clampInt(c.guard.maxPerDay, 1, 2000, 20);
 
   c.fallback.enabled = Boolean(c.fallback.enabled);
   c.fallback.webhookUrl = String(c.fallback.webhookUrl || "").trim();

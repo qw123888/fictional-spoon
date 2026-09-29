@@ -15,7 +15,7 @@
 │  监听器（电脑 / Python） │ ──────────────────────────────▶ │  Cloudflare Worker（本站）    │
 │  discord_monitor.py      │   {kind,title,content,source}   │  ① 访问令牌校验               │
 │        │                 │                                 │  ② 总开关 / 时间段判定        │
-│        ▼                 │                                 │  ③ 防轰炸（去重·间隔·小时配额）│
+│        ▼                 │                                 │  ③ 防轰炸（去重·间隔·时/日配额）│
 │  notify_bridge.NotifyBridge ── 可选：独立 CLI / 其它程序 ──▶ │  ④ 重试 → 调通道适配器        │
 └──────────────────────────┘                                 │  ⑤ 写日志 / 健康快照 / 兜底   │
                                                              └───────────────┬───────────────┘
@@ -45,7 +45,7 @@ fictional-spoon/
 │  └─ core/
 │     ├─ config.js             # 配置读写 + 默认值 + 客户端补丁合并
 │     ├─ window.js             # 通知时间段（时区 / 星期 / 多区间 / 跨天）
-│     ├─ guard.js              # 防轰炸：去重、最小间隔、每小时上限
+│     ├─ guard.js              # 防轰炸：去重、最小间隔、每小时/每天上限（默认对齐 Spug 流控）
 │     ├─ store.js              # KV（未绑定 KV 时自动退化为内存）
 │     ├─ logger.js             # 通知日志 + 计数
 │     └─ auth.js               # 访问令牌
@@ -232,7 +232,18 @@ Workers & Pages → Pages → 连接到 Git → 框架预设 **None**、构建�
 ```
 
 被时间段/去重/配额拦下时 `ok:false, skipped:true`，`reason` 取
-`outside_window` / `duplicate` / `rate_limited` / `hourly_quota` / `disabled` / `unknown_channel` / `invalid_signal`。
+`outside_window` / `duplicate` / `rate_limited` / `hourly_quota` / `daily_quota` / `disabled` / `unknown_channel` / `invalid_signal`。
+
+**防轰炸默认值按 Spug 语音通道自身的限流设定**（改大就会撞平台流控，那通电话不会响、还会静默返回成功）：
+
+| 参数 | 默认 | 依据 |
+| --- | --- | --- |
+| `guard.dedupeSeconds` | 60 | 同一条消息指纹 60s 内只打一次 |
+| `guard.minIntervalSeconds` | 60 | Spug：1 通/分钟 |
+| `guard.maxPerHour` | 5 | Spug：5 通/小时 |
+| `guard.maxPerDay` | 20 | Spug：20 通/天（超了 `xsend` 仍回 `code:200`，查状态才是 `status=3 触发流控`） |
+
+`force`（`/api/test-call`、`/api/signal` 带 `force:true`）绕过时间段与防轰炸，也不占额度。
 
 ---
 
@@ -262,7 +273,10 @@ comm.register(new SmsAdapter(cfg));   // 非 ChannelAdapter 实例会被拒绝
 
 | 现象 | 原因与处理 |
 | --- | --- |
-| `spug_403` + `受限IP: x.x.x.x 您的IP不在白名单内` | Spug 控制台给这个 App Key 开了 IP 白名单。**Cloudflare 的出网 IP 是动态且不公开的，无法加白**：去 Spug 控制台把该 App Key 的 IP 白名单关掉（或只留本地直连、不用 Worker 发请求）。 |
+| `spug_403` + `受限IP: x.x.x.x 您的IP不在白名单内` | Spug 控制台给这个 App Key 开了 IP 白名单。**Cloudflare 的出网 IP 是动态且不公开的，无法加白**：去 Spug 控制台把该 App Key 的 IP 白名单关掉，或者**换一个没开白名单的 App Key**（实测：同一账号下两个 App Key，一个被 `受限IP` 拦住、另一个 `code:200 请求成功` —— 白名单是**按 App Key** 生效的）。 |
+| `spug_400` + `因应用key限制，无可用通道` | 这个 App Key 的通道权限范围里没有你在 `channel` 里指定的通道。到 Spug 控制台改该 App Key 的授权通道，或换一个 Key。 |
+| 接口报 `Invalid data type for parse` | 请求体带了 **UTF-8 BOM**（PowerShell `Set-Content -Encoding UTF8` 会写 BOM）。用无 BOM 的 UTF-8 重发即可；页面与 Node/Python 代码不受影响。 |
+| 电话打了但对方没接到 / `status=3` `此号码触发流控` | 撞上 Spug 语音通道自身的限流：**1 通/分钟、5 通/小时、20 通/天**（按号码）。此时 `xsend` 仍返回 `code:200`，只有查发送状态才看得到 —— 所以站点侧默认值已按此对齐（见 §4），撞限流的那通**不计费**。 |
 | `spug_400` + `请求参数缺失：title` | 这是**自检**的正常返回，说明域名可达、App Key 格式正确（自检故意不带参数，因此不会真的拨号）。 |
 | 电话不响、`code` 提示手机号未授权 | Spug 要求机主先完成「防骚扰授权」（扫码后发短信确认），否则语音通道对该号码不可用。 |
 | `code` 提示渠道未开启 / App Key 未授权 | 在 Spug 控制台开启 voice 通道，并确认 App Key 的权限范围包含语音。 |
