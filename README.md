@@ -144,6 +144,33 @@ py -3 notify_bridge.py --signal "标题" "内容"        # 发一条普通信号
 
 ## 5. 部署到 Cloudflare
 
+### 第 0 步：先把代码推到 GitHub
+
+仓库：`https://github.com/qw123888/fictional-spoon`
+
+**方式一（一条命令）**：双击 `push-github.bat`，粘贴 GitHub PAT 即可。
+没令牌就去 https://github.com/settings/personal-access-tokens/new 建一个
+（Fine-grained：Repository access 选 `fictional-spoon`，Permissions → Contents = **Read and write**；
+或用经典令牌 https://github.com/settings/tokens/new 勾 `repo`）。令牌只用于这一次 `git push`，
+不会写进 `.git/config`。
+
+**方式二（网页手动上传）**：把仓库文件拖到 GitHub 的 Add file → Upload files 页面。
+⚠ **不要拖 `.dev.vars`、`local/data/`、`node_modules/`** —— 里面是真实密钥；
+`git archive` 出来的 `上传包.zip` 只含该传的文件，解压后拖它就行。
+
+### 方式 A（推荐，推上去就自动部署）：Cloudflare 连你的 GitHub 仓库
+
+1. Cloudflare 控制台 → **Workers & Pages** → 创建 → Workers → **连接到 Git** → 选 `fictional-spoon`，分支 `main`
+2. 构建命令留空，部署命令 `npx wrangler deploy`（仓库根有 `wrangler.toml`，CF 会自动识别）
+3. 建 KV：**KV** → Create namespace（名字随意，如 `phone-notify-kv`）→ 复制返回的 **ID**
+   → 填进 `wrangler.toml` 的 `[[kv_namespaces]] id = "..."`，再 push 一次
+   （不想改文件就在 Worker → Settings → Bindings 里加 KV 绑定，变量名填 `NOTIFY_KV`，代码两种绑定名都认）
+4. Worker → **Settings → Variables and Secrets** 加三项，类型选 **Secret**：
+   `SPUG_APP_KEY`、`SPUG_DEV_TOKEN`、`SIGNAL_TOKEN`（`SIGNAL_TOKEN` 自己定，电脑端用同一个）
+5. 部署完拿到 `https://phone-notify.<你的子域>.workers.dev`
+
+### 方式 B（本地 CLI 部署）
+
 ```bash
 npm install
 npx wrangler login                                   # 浏览器授权（一次性）
@@ -158,12 +185,21 @@ npx wrangler secret put SIGNAL_TOKEN                 # 自己定一串令牌，�
 npx wrangler deploy                                  # → https://phone-notify.<子域>.workers.dev
 ```
 
-部署后把 `config.json` 的 `notify.site_url` 换成上面这个地址即可。
+### 方式 C：Pages（也是连 Git）
+
+Workers & Pages → Pages → 连接到 Git → 框架预设 **None**、构建命令**留空**、输出目录 `public`
+→ Settings → Functions → KV 命名空间绑定（变量名 `NOTIFY_KV`）
+→ Settings → 环境变量加 `SPUG_APP_KEY` / `SPUG_DEV_TOKEN` / `SIGNAL_TOKEN`（都勾加密）。
+入口已备好 `functions/api/[[route]].js`，`public/_routes.json` 让只有 `/api/*` 走函数、其余走静态资源。
+
+> 三种方式**选一个**就行，别同时开（会各跑一份，日志和配额会互相干扰）。
+> 部署后把 `config.json` 的 `notify.site_url` 换成线上地址，再在监听器里点一次「📞 测试电话」。
+
+补充：
 
 - **不绑定 KV 也能跑**：内存模式，但配置和日志会在实例重启/切换时丢失，控制台会显示「内存（临时）」。
 - **令牌优先级**：环境变量 `SIGNAL_TOKEN` > 控制台里保存的令牌。部署时用 secret 下发更安全，
   浏览器端只要在「访问令牌」里填同样的值即可（本地 localStorage 保存，不落库）。
-- 想用 **Pages** 也行：`npm run deploy:pages`，入口已备好 `functions/api/[[route]].js`。
 - 想绑自定义域名：Cloudflare 控制台 → Workers → 该项目 → Settings → Domains & Routes → Add。
 
 ---
