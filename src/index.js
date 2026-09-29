@@ -1,5 +1,5 @@
 import { createStore } from "./core/store.js";
-import { loadConfig, saveConfig, mergeClientPatch } from "./core/config.js";
+import { loadConfig, loadStoredConfig, saveConfig, mergeClientPatch } from "./core/config.js";
 import { EventLog } from "./core/logger.js";
 import { CommModule } from "./comm/index.js";
 import { handleSignal } from "./signal.js";
@@ -105,6 +105,23 @@ export async function handleApi(request, env = {}) {
     })();
   }
 
+  // ---------- 通道资源查询（电话通道 = 剩余语音分钟数 / 余额）----------
+  if (path === "/api/balance" && method === "GET") {
+    return needAuth(async () => {
+      const result = await comm.balance(url.searchParams.get("kind") || "phone");
+      return json(result, result.ok ? 200 : 502);
+    })();
+  }
+
+  // ---------- 按 request_id 查实际发送结果 ----------
+  if (path === "/api/status" && method === "GET") {
+    return needAuth(async () => {
+      const requestId = url.searchParams.get("requestId") || "";
+      const result = await comm.queryStatus(requestId, url.searchParams.get("kind") || "phone");
+      return json(result, result.ok ? 200 : 502);
+    })();
+  }
+
   // ---------- 配置读写 ----------
   if (path === "/api/config" && method === "GET") {
     return needAuth(async () => {
@@ -113,9 +130,14 @@ export async function handleApi(request, env = {}) {
         ok: true,
         config: {
           ...cfg,
-          spug: { ...cfg.spug, appKey: maskKey(cfg.spug.appKey) }
+          spug: {
+            ...cfg.spug,
+            appKey: maskKey(cfg.spug.appKey),
+            devToken: maskKey(cfg.spug.devToken)
+          }
         },
         hasAppKey: Boolean(cfg.spug.appKey),
+        hasDevToken: Boolean(cfg.spug.devToken),
         windowText: describeWindow(cfg)
       });
     })();
@@ -126,9 +148,12 @@ export async function handleApi(request, env = {}) {
       const patch = await readJson(request);
       if (patch === null) return json({ ok: false, error: "bad_json" }, 400);
       const current = await comm.config();
-      const next = mergeClientPatch(current, patch);
+      // 合并基线用"库里的配置"（不含 env 覆盖），否则 env 里的密钥会被写进 KV
+      const stored = await loadStoredConfig(store);
+      const next = mergeClientPatch(stored, patch);
       // 前端传回掩码值时保留原 Key
-      if (String(patch?.spug?.appKey || "").includes("***")) next.spug.appKey = current.spug.appKey;
+      if (String(patch?.spug?.appKey || "").includes("***")) next.spug.appKey = stored.spug.appKey || current.spug.appKey;
+      if (String(patch?.spug?.devToken || "").includes("***")) next.spug.devToken = stored.spug.devToken || current.spug.devToken;
       if (patch?.auth?.token !== undefined) await saveToken(store, patch.auth.token);
       await saveConfig(store, next);
       return json({ ok: true, windowText: describeWindow(next), hasAppKey: Boolean(next.spug.appKey) });

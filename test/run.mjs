@@ -49,10 +49,14 @@ const mock = {
   phoneQueue: [],
   phoneCalls: [],
   webhookCalls: [],
+  balanceCalls: [],
+  queryCalls: [],
   reset() {
     this.phoneQueue = [];
     this.phoneCalls = [];
     this.webhookCalls = [];
+    this.balanceCalls = [];
+    this.queryCalls = [];
   }
 };
 
@@ -64,6 +68,24 @@ function installFetchMock() {
       mock.phoneCalls.push({ url: u, body });
       const next = mock.phoneQueue.shift() || { status: 200, json: { code: 200, msg: "请求成功", request_id: "REQ_TEST" } };
       return new Response(JSON.stringify(next.json), { status: next.status, headers: { "Content-Type": "application/json" } });
+    }
+    if (u.includes("mock-spug.local/request/balance")) {
+      mock.balanceCalls.push({ url: u, body });
+      return new Response(
+        JSON.stringify({
+          code: 200,
+          msg: "查询成功",
+          data: { money_balance: 0.0, sms_resource_balance: 2, voice_resource_balance: 16, mail_resource_balance: 10, wx_mp_resource_balance: 100 }
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+    if (u.includes("mock-spug.local/request/query")) {
+      mock.queryCalls.push({ url: u, body });
+      return new Response(
+        JSON.stringify({ code: 200, msg: "请求成功", data: [{ channel: "voice", status: "发送成功" }] }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
     }
     if (u.includes("hook.local")) {
       mock.webhookCalls.push({ url: u, body });
@@ -88,6 +110,7 @@ const TOKEN = "test-token-123";
 const ENV = {
   NOTIFY_KV: memoryKV(),
   SPUG_APP_KEY: "ak_test_key",
+  SPUG_DEV_TOKEN: "dev_token_test",
   SPUG_BASE_URL: "https://mock-spug.local",
   SIGNAL_TOKEN: TOKEN
 };
@@ -164,6 +187,8 @@ async function testAuthAndConfig() {
   eq(good.data.ok, true, "正确令牌 → 200");
   eq(good.data.config.spug.appKey.includes("***"), true, "响应里 App Key 被掩码");
   eq(good.data.hasAppKey, true, "hasAppKey = true");
+  eq(good.data.config.spug.devToken.includes("***"), true, "响应里开发者 Token 也被掩码");
+  eq(good.data.hasDevToken, true, "hasDevToken = true");
 
   await setConfig({ guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50 }, spug: { appKey: "ak_test_key" } });
   const after = await call("/api/config");
@@ -310,6 +335,39 @@ async function testFailureAndFallback() {
   const probe = await call("/api/probe", { method: "POST", body: { kind: "phone" } });
   eq(probe.data.ok, true, "自检：拿到 400 参数缺失 → 接口可达");
   eq(mock.phoneCalls[0].body.title, undefined, "自检请求体不含 title（不会真拨号）");
+
+  // 4.6 资源查询 / 发送状态（只能靠开发者 Token）
+  mock.reset();
+  const bal = await call("/api/balance");
+  eq(bal.status, 200, "GET /api/balance → 200");
+  eq(bal.data.ok, true, "余额查询成功");
+  eq(bal.data.voiceMinutes, 16, "解析出剩余语音 16 分钟");
+  eq(bal.data.money, 0, "解析出余额 0 元");
+  eq(mock.balanceCalls.length, 1, "确实调了一次 /request/balance");
+  eq(mock.balanceCalls[0].body.token, "dev_token_test", "查询用的是开发者 Token（环境变量）");
+  eq(mock.phoneCalls.length, 0, "查余额不会触发任何拨号请求");
+
+  const st = await call("/api/status?requestId=REQ_TEST");
+  eq(st.data.ok, true, "按 request_id 查发送状态成功");
+  eq(st.data.items.length, 1, "返回 1 条通道结果");
+  eq(mock.queryCalls[0].body.request_id, "REQ_TEST", "request_id 正确透传");
+  eq(mock.queryCalls[0].body.token, "dev_token_test", "查询用的是开发者 Token");
+
+  const stNoId = await call("/api/status");
+  eq(stNoId.data.ok, false, "缺 request_id → 失败");
+  eq(stNoId.data.reason, "missing_request_id", "原因 = missing_request_id");
+
+  const balNoAuth = await call("/api/balance", { token: "" });
+  eq(balNoAuth.status, 401, "无令牌查余额 → 401");
+
+  // 没配开发者 Token 时给出可读提示而不是崩
+  const savedDev = ENV.SPUG_DEV_TOKEN;
+  ENV.SPUG_DEV_TOKEN = "";
+  const balMissing = await call("/api/balance");
+  eq(balMissing.data.ok, false, "无开发者 Token → ok=false");
+  eq(balMissing.data.reason, "missing_dev_token", "原因 = missing_dev_token");
+  ENV.SPUG_DEV_TOKEN = savedDev;
+  installFetchMock();
 }
 
 async function testHealthAndLogs() {

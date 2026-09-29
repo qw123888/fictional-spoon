@@ -27,7 +27,7 @@ export class PhoneCallAdapter extends ChannelAdapter {
   }
 
   supports(feature) {
-    return ["voice", "text"].includes(String(feature));
+    return ["voice", "text", "balance", "query"].includes(String(feature));
   }
 
   async send(payload, ctx) {
@@ -139,6 +139,91 @@ export class PhoneCallAdapter extends ChannelAdapter {
     } catch (err) {
       const aborted = err && err.name === "AbortError";
       return { ok: false, supported: true, reason: aborted ? "timeout" : "network", detail: aborted ? "自检超时" : String((err && err.message) || err) };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * 余额 / 语音资源查询。只有开发者 Token 能查，App Key 不行。
+   * 用来做「电话接口会不会打到没分钟数」的前置告警。
+   */
+  async balance(ctx) {
+    const cfg = ctx.config;
+    const token = cfg.spug.devToken;
+    if (!token) {
+      return {
+        ok: false,
+        supported: true,
+        reason: "missing_dev_token",
+        detail: "未配置开发者 Token（只能查余额和发送状态，App Key 不行）"
+      };
+    }
+    const data = await this._post(cfg, "/request/balance", { token }, cfg.phone.timeoutMs);
+    if (!data.ok) return { ...data, supported: true };
+    const d = data.raw?.data || {};
+    return {
+      ok: true,
+      supported: true,
+      money: Number(d.money_balance ?? 0),
+      voiceMinutes: Number(d.voice_resource_balance ?? 0),
+      sms: Number(d.sms_resource_balance ?? 0),
+      mail: Number(d.mail_resource_balance ?? 0),
+      wxMp: Number(d.wx_mp_resource_balance ?? 0),
+      detail: `语音剩余 ${Number(d.voice_resource_balance ?? 0)} 分钟，余额 ${Number(d.money_balance ?? 0)} 元`
+    };
+  }
+
+  /** 按 request_id 查这一条通知在各个渠道的实际发送结果 */
+  async query(requestId, ctx) {
+    const cfg = ctx.config;
+    const token = cfg.spug.devToken;
+    if (!token) {
+      return { ok: false, supported: true, reason: "missing_dev_token", detail: "未配置开发者 Token" };
+    }
+    if (!requestId) return { ok: false, supported: true, reason: "missing_request_id", detail: "缺少 request_id" };
+    const data = await this._post(cfg, "/request/query", { token, request_id: requestId }, cfg.phone.timeoutMs);
+    if (!data.ok) return { ...data, supported: true };
+    return { ok: true, supported: true, items: data.raw?.data || [], detail: "查询成功" };
+  }
+
+  /** 给开发者 Token 类接口用的通用 POST */
+  async _post(cfg, path, body, timeoutMs) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const resp = await fetch(`${cfg.spug.baseUrl}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: ctrl.signal
+      });
+      const text = await resp.text();
+      let data = null;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = null;
+      }
+      const code = data ? Number(data.code) : null;
+      if (resp.ok && code === 200) {
+        return { ok: true, reason: "ok", detail: data?.msg || "请求成功", raw: data };
+      }
+      return {
+        ok: false,
+        retryable: resp.status >= 500 || code === null,
+        reason: `spug_${code ?? resp.status}`,
+        detail: (data && data.msg) || `HTTP ${resp.status}: ${truncate(text, 150)}`,
+        raw: data
+      };
+    } catch (err) {
+      const aborted = err && err.name === "AbortError";
+      return {
+        ok: false,
+        retryable: true,
+        reason: aborted ? "timeout" : "network",
+        detail: aborted ? `请求超时（${timeoutMs}ms）` : String((err && err.message) || err)
+      };
     } finally {
       clearTimeout(timer);
     }

@@ -51,5 +51,6 @@ export class Store {
 }
 
 export function createStore(env = {}) {
-  return new Store(env.NOTIFY_KV || null);
+  // 兼容两种绑定名：wrangler.toml 里的 NOTIFY_KV，或控制台模板默认的 KV
+  return new Store(env.NOTIFY_KV || env.KV || null);
 }

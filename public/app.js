@@ -8,9 +8,11 @@ const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "�
 const state = {
   config: null,
   health: null,
+  balance: null,
   token: localStorage.getItem("pn_token") || "",
   timerHealth: null,
-  timerLogs: null
+  timerLogs: null,
+  timerBalance: null
 };
 
 /* ---------------- 基础工具 ---------------- */
@@ -79,10 +81,20 @@ function renderHealth(h) {
     ? `最近一次：${last.ok ? "成功" : "失败"} ${fmtTime(new Date(last.ts).toISOString())}${last.detail ? ` · ${last.detail.slice(0, 40)}` : ""}`
     : "尚无发送记录";
 
+  const bal = state.balance;
+  const balValue = bal && bal.ok ? `${bal.voiceMinutes} 分钟` : bal ? "查询失败" : "未查询";
+  const balDetail = bal
+    ? bal.ok
+      ? `余额 ${bal.money} 元 · 短信 ${bal.sms} · 邮件 ${bal.mail}`
+      : bal.detail || bal.reason || ""
+    : "点左侧「查询剩余语音分钟」";
+  const balCls = bal && bal.ok ? (bal.voiceMinutes > 0 ? "ok" : "bad") : "";
+
   $("status-cards").innerHTML = [
     card("当前时间", `${h.now.iso} <span style="color:var(--fg-dim)">${WEEKDAYS[h.now.weekday] || ""}</span>`, `时区 ${h.now.tz}`, "", "big"),
     card("自动通知时间段", winValue, win.detail || "", winCls, win.active ? "big" : "big"),
     card("本小时通话", `${guard.usedThisHour ?? 0} / ${guard.maxPerHour ?? "-"}`, guard.lastSendAt ? `上次：${fmtTime(guard.lastSendAt)}` : "本小时尚未拨打", "", "count"),
+    card("剩余语音", balValue, balDetail, balCls, "count"),
     card("电话接口", phoneValue, lastDetail, phone.configured ? "" : "warn"),
     card("通知总开关", h.enabled ? "已开启" : "已关闭", h.enabled ? "收到信号会按时间段拨打" : "仅 force 信号可穿透", h.enabled ? "ok" : "warn"),
     card("存储 / 令牌", h.storage.backend === "cloudflare-kv" ? "KV 持久化" : "内存（临时）", `${h.auth.configured ? "令牌已设置" : "⚠ 未设置令牌，站点开放"}`, h.auth.configured ? "" : "warn")
@@ -140,6 +152,7 @@ function fillConfig(cfg) {
   $("cfg-retry").value = cfg.phone.retry;
   $("cfg-timeout").value = cfg.phone.timeoutMs;
   $("cfg-appkey").value = cfg.spug.appKey || "";
+  $("cfg-devtoken").value = cfg.spug.devToken || "";
 
   $("cfg-fallback-enabled").checked = Boolean(cfg.fallback.enabled);
   $("cfg-fallback-url").value = cfg.fallback.webhookUrl || "";
@@ -167,7 +180,7 @@ function collectConfig() {
       timeoutMs: Number($("cfg-timeout").value)
     },
     fallback: { enabled: $("cfg-fallback-enabled").checked, webhookUrl: $("cfg-fallback-url").value.trim() },
-    spug: { appKey: $("cfg-appkey").value.trim() }
+    spug: { appKey: $("cfg-appkey").value.trim(), devToken: $("cfg-devtoken").value.trim() }
   };
 }
 
@@ -256,8 +269,28 @@ async function doProbe() {
   $("op-result").className = `hint ${ok ? "ok" : "bad"}`;
 }
 
-async function doSendSignal() {
-  const body = {
+/** 查剩余语音分钟 / 余额（走开发者 Token；App Key 查不了） */
+async function doBalance(quiet = false) {
+  const btn = $("btn-balance");
+  if (btn) btn.disabled = true;
+  if (!quiet) {
+    $("op-result").textContent = "查询中…";
+    $("op-result").className = "hint";
+  }
+  const { data } = await api("/api/balance");
+  if (btn) btn.disabled = false;
+  state.balance = data || null;
+  if (state.health) renderHealth(state.health);
+  if (!quiet && data) {
+    const ok = data.ok;
+    $("op-result").textContent = `${ok ? "✅" : "❌"} ${data.detail || data.reason || "无结果"}`;
+    $("op-result").className = `hint ${ok ? "ok" : "bad"}`;
+    if (ok && data.voiceMinutes <= 3) toast(`⚠ 剩余语音仅 ${data.voiceMinutes} 分钟，快去充值`, "bad");
+  }
+  return data;
+}
+
+async function doSendSignal() {  const body = {
     kind: "phone",
     title: $("sig-title").value,
     content: $("sig-content").value,
@@ -297,6 +330,7 @@ function tickClock() {
 function bind() {
   $("btn-test").addEventListener("click", doTestCall);
   $("btn-probe").addEventListener("click", doProbe);
+  $("btn-balance").addEventListener("click", () => doBalance(false));
   $("btn-send-signal").addEventListener("click", doSendSignal);
   $("btn-save").addEventListener("click", doSave);
   $("btn-refresh").addEventListener("click", () => {
@@ -340,9 +374,11 @@ function bind() {
   $("auto-refresh").addEventListener("change", (e) => {
     clearInterval(state.timerHealth);
     clearInterval(state.timerLogs);
+    clearInterval(state.timerBalance);
     if (e.target.checked) {
       state.timerHealth = setInterval(refreshHealth, 8000);
       state.timerLogs = setInterval(refreshLogs, 8000);
+      state.timerBalance = setInterval(() => doBalance(true), 5 * 60 * 1000);
     }
   });
 
@@ -365,6 +401,9 @@ async function main() {
 
   state.timerHealth = setInterval(refreshHealth, 8000);
   state.timerLogs = setInterval(refreshLogs, 8000);
+  // 语音分钟数变化很慢，5 分钟查一次就够（也能避免频繁调用接口）
+  doBalance(true);
+  state.timerBalance = setInterval(() => doBalance(true), 5 * 60 * 1000);
 }
 
 main();

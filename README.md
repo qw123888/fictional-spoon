@@ -152,6 +152,7 @@ npx wrangler kv namespace create NOTIFY_KV           # 复制返回的 id
 #   把 id 填进 wrangler.toml 的 [[kv_namespaces]].id
 
 npx wrangler secret put SPUG_APP_KEY                 # 粘贴 App Key
+npx wrangler secret put SPUG_DEV_TOKEN               # Spug「开发者 Token」：查余额/发送状态（可选但推荐）
 npx wrangler secret put SIGNAL_TOKEN                 # 自己定一串令牌，电脑端用同一个
 
 npx wrangler deploy                                  # → https://phone-notify.<子域>.workers.dev
@@ -176,7 +177,9 @@ npx wrangler deploy                                  # → https://phone-notify.
 | POST | `/api/signal` | 是 | **信号接收接口**，电脑端唯一入口。`{kind,title,content,source,id,force}` |
 | POST | `/api/test-call` | 是 | 测试电话（`force`，绕过时间段与去重，不占配额） |
 | POST | `/api/probe` | 是 | 通道自检（对电话通道只做「不拨号」的可达性验证） |
-| GET/POST | `/api/config` | 是 | 读/改配置（App Key 回传掩码，填回掩码不会清空真 Key） |
+| GET | `/api/balance` | 是 | **资源查询**：剩余语音分钟数 / 余额 / 短信 / 邮件（需开发者 Token） |
+| GET | `/api/status?requestId=` | 是 | 按 `requestId` 查这条通知在各通道的实际发送结果（需开发者 Token） |
+| GET/POST | `/api/config` | 是 | 读/改配置（App Key 与开发者 Token 回传掩码，填回掩码不会清空真值） |
 | POST | `/api/auth/token` | 视情况 | 设置站点令牌 |
 | GET | `/api/auth/check` | 否 | 当前令牌是否有效 |
 | GET | `/api/logs?limit=` | 是 | 最近通知日志 + 统计 |
@@ -229,6 +232,8 @@ comm.register(new SmsAdapter(cfg));   // 非 ChannelAdapter 实例会被拒绝
 | 被手机系统拦截 | Spug 语音主叫号：`021 31443892`、`021 32199761`、`0371 55969643`，可加白名单或关拦截。 |
 | 网页显示「内存（临时）」 | 没有绑定 KV（`wrangler.toml` 里 `id` 为空）。绑定后配置与日志才会持久化。 |
 | 网页 401 | 浏览器「访问令牌」里的值与环境变量 `SIGNAL_TOKEN` 不一致（环境变量优先）。 |
+| 剩余语音显示「查询失败 / 未配置开发者 Token」 | 查余额和发送状态**只能**用 Spug 控制台的「开发者 Token」（App Key 不行）：填到控制台「电话接口参数 → 开发者Token」，或 `wrangler secret put SPUG_DEV_TOKEN`。 |
+| 剩余语音 0 分钟 | 语音是计费通道，去 Spug 控制台充值或买语音资源包；控制台会在 ≤3 分钟时弹红色提醒。 |
 | 电脑端 401 | `config.json → notify.token` 与站点令牌不一致。 |
 | 时间段不对 | 检查 `window.tz`（默认 `Asia/Shanghai`）、`mode`（`inside`=只在时段内拨 / `outside`=只在时段外拨）、星期与区间；跨天写 `["22:00","06:00"]`。 |
 
@@ -236,6 +241,7 @@ comm.register(new SmsAdapter(cfg));   // 非 ChannelAdapter 实例会被拒绝
 
 ## 9. 安全
 
-- App Key、令牌只放服务端：`wrangler secret` 或本地 `.dev.vars`（已 gitignore），**不进仓库、不进前端**。
-- 控制台里 App Key 一律以掩码展示。
+- App Key、开发者 Token、令牌只放服务端：`wrangler secret` 或本地 `.dev.vars`（已 gitignore），**不进仓库、不进前端**。
+- 控制台里 App Key 与开发者 Token 一律以掩码展示；填回掩码不会覆盖真实值。
+- 保存配置时以「库里的配置」为合并基线，**环境变量里的密钥不会被回写进 KV**。
 - 未配置令牌时站点对所有人开放，只适合本地调试；部署后务必设置 `SIGNAL_TOKEN`。

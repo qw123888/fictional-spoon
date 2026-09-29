@@ -58,6 +58,30 @@ export class CommModule {
     return { adapter: adapter.name, kind: adapter.kind, ms: Date.now() - started, ...result };
   }
 
+  /** 通道资源查询（电话通道 = Spug 剩余语音分钟数/余额） */
+  async balance(kind = "phone") {
+    const cfg = await this.config();
+    const adapter = this.registry.get(kind);
+    if (!adapter) return { ok: false, reason: "unknown_channel", detail: `未知通道：${kind}` };
+    if (typeof adapter.balance !== "function" || !adapter.supports("balance")) {
+      return { ok: false, reason: "unsupported", detail: `${adapter.label} 不支持资源查询` };
+    }
+    const result = await adapter.balance({ config: cfg, store: this.store, log: this.log, env: this.env });
+    return { adapter: adapter.name, kind: adapter.kind, ...result };
+  }
+
+  /** 按 request_id 查某条通知的实际发送结果 */
+  async queryStatus(requestId, kind = "phone") {
+    const cfg = await this.config();
+    const adapter = this.registry.get(kind);
+    if (!adapter) return { ok: false, reason: "unknown_channel", detail: `未知通道：${kind}` };
+    if (typeof adapter.query !== "function" || !adapter.supports("query")) {
+      return { ok: false, reason: "unsupported", detail: `${adapter.label} 不支持发送状态查询` };
+    }
+    const result = await adapter.query(requestId, { config: cfg, store: this.store, log: this.log, env: this.env });
+    return { adapter: adapter.name, kind: adapter.kind, ...result };
+  }
+
   /**
    * 主通信接口：发一条通知
    * @param {object} signal {kind, title, content, source, id, meta, force}

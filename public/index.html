@@ -62,6 +62,7 @@
       <div class="panel-body">
         <button class="btn primary wide" id="btn-test">📞 测试电话（真实拨号）</button>
         <button class="btn wide" id="btn-probe">🔍 电话接口自检（不拨号）</button>
+        <button class="btn wide" id="btn-balance">📊 查询剩余语音分钟 / 余额</button>
         <div class="hint" id="op-result"></div>
       </div>
     </div>
@@ -146,7 +147,8 @@
         <label class="field"><span>重试次数</span><input id="cfg-retry" type="number" min="0" max="5"></label>
         <label class="field"><span>超时(ms)</span><input id="cfg-timeout" type="number" min="1000" max="60000"></label>
         <label class="field"><span>App Key</span><input id="cfg-appkey" type="text" placeholder="ak_..."></label>
-        <div class="hint">App Key 也可以放 Cloudflare Secret（<code>SPUG_APP_KEY</code>），环境变量优先。</div>
+        <label class="field"><span>开发者Token</span><input id="cfg-devtoken" type="text" placeholder="只用于查余额与发送状态"></label>
+        <div class="hint">两者都可放 Cloudflare Secret（<code>SPUG_APP_KEY</code> / <code>SPUG_DEV_TOKEN</code>），环境变量优先。App Key 用来打电话，开发者 Token 只能查余额和发送结果、不能发消息。</div>
       </div>
     </div>
 

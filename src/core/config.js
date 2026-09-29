@@ -40,7 +40,9 @@ export const DEFAULT_CONFIG = {
   // 电话接口（Spug 推送助手）连接参数；appKey 也可以走环境变量 / wrangler secret
   spug: {
     baseUrl: "https://push.spug.cc",
-    appKey: ""
+    appKey: "",
+    // 开发者 Token：只有它能查余额/发送状态（App Key 不行），用于健康监控
+    devToken: ""
   }
 };
 
@@ -109,6 +111,7 @@ export function normalizeConfig(input = {}) {
 
   c.spug.baseUrl = String(c.spug.baseUrl || DEFAULT_CONFIG.spug.baseUrl).replace(/\/+$/, "");
   c.spug.appKey = String(c.spug.appKey || "").trim();
+  c.spug.devToken = String(c.spug.devToken || "").trim();
 
   return c;
 }
@@ -125,13 +128,19 @@ export function mergeClientPatch(current, patch = {}) {
 }
 
 export async function loadConfig(store, env = {}) {
-  const saved = await store.get(CONFIG_KEY, null);
-  const cfg = normalizeConfig(saved || {});
+  const cfg = await loadStoredConfig(store);
   // 环境变量优先（wrangler secret / .dev.vars 里配的凭据不落地到 KV）
   if (env.SPUG_BASE_URL) cfg.spug.baseUrl = String(env.SPUG_BASE_URL).replace(/\/+$/, "");
   if (env.SPUG_APP_KEY) cfg.spug.appKey = String(env.SPUG_APP_KEY).trim();
+  if (env.SPUG_DEV_TOKEN) cfg.spug.devToken = String(env.SPUG_DEV_TOKEN).trim();
   if (env.SPUG_CHANNEL) cfg.phone.channel = String(env.SPUG_CHANNEL).trim();
   return cfg;
+}
+
+/** 只读库里的配置（不含环境变量覆盖），用于保存时做合并基线，避免把 env 里的密钥写进 KV */
+export async function loadStoredConfig(store) {
+  const saved = await store.get(CONFIG_KEY, null);
+  return normalizeConfig(saved || {});
 }
 
 export async function saveConfig(store, cfg) {
