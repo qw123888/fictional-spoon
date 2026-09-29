@@ -123,21 +123,46 @@ if ($parentSha -eq $localSha) {
   exit 0
 }
 
-# 4) 逐文件上传 blob（内容是本地 HEAD 里的版本，不用工作区）
-Write-Host "上传文件对象…"
-$files = (git ls-tree -r HEAD --name-only) | Where-Object { $_.Trim() }
-if (-not $files) { Fail "本地 HEAD 里没有文件。" }
+# 4) 只上传与远端不同的文件；内容取 HEAD 里的 blob（不是工作区，避免 autocrlf 改写行尾/把未提交内容推上去）
+Write-Host "比对与远端不同的文件…"
+$remoteBlobs = @{}
+if ($parentSha) {
+  $rt = HttpJson "GET" "$Api/repos/$Repo/git/trees/$parentSha`?recursive=1" $null
+  if ($rt.ok) {
+    foreach ($e in $rt.data.tree) { if ($e.type -eq "blob") { $remoteBlobs[$e.path] = $e.sha } }
+  }
+}
+$lines = @(git ls-tree -r HEAD)
+if (-not $lines) { Fail "本地 HEAD 里没有文件。" }
+$tmp = [IO.Path]::GetTempFileName()
+$changed = @()
+foreach ($line in $lines) {
+  $parts = $line -split "\s+", 4
+  $mode = $parts[0]; $sha = $parts[2]; $path = $parts[3]
+  if ($remoteBlobs[$path] -ne $sha) { $changed += @{ path = $path; sha = $sha; mode = $mode } }
+}
+Write-Host "  需要上传：$($changed.Count) 个（远端已有 $($remoteBlobs.Count) 个文件）"
+if ($changed.Count -eq 0) {
+  Write-Host "远端内容与本地 HEAD 完全一致，无需推送 ✅" -ForegroundColor Green
+  exit 0
+}
+
 $tree = @()
 $i = 0
-foreach ($f in $files) {
+foreach ($c in $changed) {
   $i++
-  $bytes = [IO.File]::ReadAllBytes((Join-Path (Get-Location) ($f -replace "/", "\")))
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  cmd /c "git cat-file blob $($c.sha) > `"$tmp`"" 2>&1 | Out-Null
+  $ErrorActionPreference = $prevEap
+  $bytes = [IO.File]::ReadAllBytes($tmp)
   $b64 = [Convert]::ToBase64String($bytes)
   $r = HttpJson "POST" "$Api/repos/$Repo/git/blobs" @{ content = $b64; encoding = "base64" }
-  if (-not $r.ok) { Fail "上传 $f 失败（HTTP $($r.code)）：$($r.data)" }
-  $tree += @{ path = $f; mode = "100644"; type = "blob"; sha = $r.data.sha }
-  Write-Host ("  [{0,2}/{1}] {2}" -f $i, $files.Count, $f)
+  if (-not $r.ok) { Fail "上传 $($c.path) 失败（HTTP $($r.code)）：$($r.data)" }
+  $tree += @{ path = $c.path; mode = $c.mode; type = "blob"; sha = $r.data.sha }
+  Write-Host ("  [{0,2}/{1}] {2}" -f $i, $changed.Count, $c.path)
 }
+Remove-Item $tmp -Force -ErrorAction SilentlyContinue
 
 # 5) 建 tree（用 base_tree 保留远端已有文件，只覆盖本地这份）
 $treeBody = @{ tree = $tree }
