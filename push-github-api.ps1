@@ -146,7 +146,19 @@ foreach ($line in $lines) {
   if ($remoteBlobs[$path] -ne $sha) { $changed += @{ path = $path; sha = $sha; mode = $mode } }
 }
 Write-Host "  需要上传：$($changed.Count) 个（远端已有 $($remoteBlobs.Count) 个文件）"
-if ($changed.Count -eq 0) {
+
+# 远端有、本地 HEAD 已经没有的文件 = 本地删掉了它，要在这里一并删除
+# （GitHub 的 tree 接口用 sha = $null 表示删除）
+$localPaths = @{}
+foreach ($line in $lines) {
+  $parts = $line -split "\s+", 4
+  $localPaths[$parts[3]] = $true
+}
+$deleted = @()
+foreach ($p in $remoteBlobs.Keys) { if (-not $localPaths[$p]) { $deleted += $p } }
+if ($deleted.Count -gt 0) { Write-Host "  需要删除：$($deleted.Count) 个（$($deleted -join ', ')）" -ForegroundColor Yellow }
+
+if ($changed.Count -eq 0 -and $deleted.Count -eq 0) {
   Write-Host "远端内容与本地 HEAD 完全一致，无需推送 ✅" -ForegroundColor Green
   exit 0
 }
@@ -167,6 +179,10 @@ foreach ($c in $changed) {
   Write-Host ("  [{0,2}/{1}] {2}" -f $i, $changed.Count, $c.path)
 }
 Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+
+foreach ($p in $deleted) {
+  $tree += @{ path = $p; mode = "100644"; type = "blob"; sha = $null }
+}
 
 # 5) 建 tree（用 base_tree 保留远端已有文件，只覆盖本地这份）
 $treeBody = @{ tree = $tree }
