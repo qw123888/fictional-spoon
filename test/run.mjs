@@ -478,6 +478,117 @@ async function testModuleBoundary() {
   eq(unknown.reason, "unknown_channel", "未知通道 → unknown_channel");
 }
 
+/** 假 Cache API：模拟"没绑 KV 时的边缘缓存兜底" */
+function fakeCaches() {
+  const map = new Map();
+  const url = (req) => (typeof req === "string" ? req : req.url);
+  return {
+    map,
+    default: {
+      async match(req) {
+        const u = url(req);
+        if (!map.has(u)) return undefined;
+        return new Response(map.get(u), { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      },
+      async put(req, resp) {
+        map.set(url(req), await resp.text());
+      },
+      async delete(req) {
+        map.delete(url(req));
+      }
+    }
+  };
+}
+
+async function callWith(env, path, opts = {}) {
+  const resp = await handleApi(makeRequest(path, { ...opts, token: opts.token === undefined ? TOKEN : opts.token }), env);
+  let data = null;
+  try {
+    data = await resp.json();
+  } catch {
+    data = null;
+  }
+  return { status: resp.status, data };
+}
+
+async function testWindowSwitchAndPersistence() {
+  console.log("\n[7] 时间段总开关 + 配置持久化（“保存没反应”回归）");
+
+  // 7.1 默认值：开关默认开
+  const def = normalizeConfig({});
+  eq(def.window.enabled, true, "时间段开关默认开启");
+  eq(normalizeConfig({ window: { enabled: false } }).window.enabled, false, "显式关闭能保留");
+
+  // 7.2 关掉开关 → 任何时间都可拨打
+  const tz = "Asia/Shanghai";
+  const tomorrow = (todayInTz(tz) + 1) % 7;
+  const offCfg = normalizeConfig({ window: { enabled: false, mode: "inside", tz, days: [tomorrow], ranges: [["00:00", "23:59"]] } });
+  const w = evaluateWindow(offCfg, new Date());
+  ok(w.active, "开关关闭：时间段不命中也允许拨打", JSON.stringify(w));
+  eq(w.reason, "window_disabled", "原因 = window_disabled");
+  eq(w.disabled, true, "结果里 disabled=true");
+  ok(w.detail.includes("任何时间"), `detail 说明了原因：${w.detail}`);
+
+  const onCfg = normalizeConfig({ window: { enabled: true, mode: "inside", tz, days: [tomorrow], ranges: [["00:00", "23:59"]] } });
+  eq(evaluateWindow(onCfg, new Date()).active, false, "开关打开时，同一份时间段配置照旧拦截");
+
+  // 7.3 走真实信号接口：开关关闭 → 真的拨号
+  mock.reset();
+  await resetQuota();
+  await setConfig({ enabled: true, window: { enabled: false, mode: "inside", tz, days: [tomorrow], ranges: [["00:00", "23:59"]] }, guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50, maxPerDay: 500 } });
+  const sent = await call("/api/signal", { method: "POST", body: { title: "开关关闭后的信号", content: "应当直接拨打", source: "test", id: "win-off-1" } });
+  eq(sent.data.ok, true, "开关关闭 → 信号直接拨打成功");
+  eq(mock.phoneCalls.length, 1, "电话接口被调用 1 次");
+  const back = await call("/api/config");
+  eq(back.data.config.window.enabled, false, "GET /api/config 能读回 window.enabled=false");
+
+  // 7.4 绑了 KV：保存 → 立刻读回（治“刷新要重填”）
+  mock.reset();
+  await setConfig({ window: { enabled: true }, guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 7, maxPerDay: 37 } });
+  const readback = await call("/api/config");
+  eq(readback.data.storage.backend, "cloudflare-kv", "有 KV 时 backend=cloudflare-kv");
+  eq(readback.data.storage.durable, true, "durable=true");
+  eq(readback.data.config.guard.maxPerDay, 37, "保存后重新 GET 仍是新值（maxPerDay=37）");
+  eq(readback.data.config.guard.maxPerHour, 7, "maxPerHour=7 也读得回来");
+  const health1 = await call("/api/health");
+  eq(health1.data.storage.label, "KV 持久化", "health 里给出人话标签");
+  eq(health1.data.window.enabled, true, "health.window.enabled 透出开关状态");
+
+  // 7.5 没绑 KV 也没缓存：如实报错，不许骗人
+  const savedCaches = globalThis.caches;
+  try {
+    delete globalThis.caches;
+    const envNoStore = { ...ENV };
+    delete envNoStore.NOTIFY_KV;
+    const bad = await callWith(envNoStore, "/api/config", { method: "POST", body: { guard: { maxPerDay: 99 } } });
+    eq(bad.data.ok, false, "存不住时 ok=false（不再假装成功）");
+    eq(bad.data.error, "not_persisted", "error = not_persisted");
+    eq(bad.data.storage.backend, "memory", "storage.backend = memory");
+    ok(String(bad.data.detail).includes("KV"), "给出绑定 KV 的提示");
+    const reread = await callWith(envNoStore, "/api/config");
+    ok(reread.data.config.guard.maxPerDay !== 99, "内存后端确实读不回新值（复现用户看到的“刷新就重填”）");
+
+    // 7.6 边缘缓存兜底：不绑 KV 也能存住
+    globalThis.caches = fakeCaches();
+    const ec = await callWith(envNoStore, "/api/config", { method: "POST", body: { guard: { maxPerDay: 42 } } });
+    eq(ec.data.ok, true, "边缘缓存模式下保存成功");
+    eq(ec.data.persisted, true, "persisted=true（真的读回来了）");
+    eq(ec.data.storage.backend, "edge-cache", "storage.backend = edge-cache");
+    const ecRead = await callWith(envNoStore, "/api/config");
+    eq(ecRead.data.config.guard.maxPerDay, 42, "下一次请求（新 isolate/新 store）仍能读到 42");
+    ok(String(ec.data.storage.label).includes("缓存"), "标签说明用的是边缘缓存");
+  } finally {
+    if (savedCaches === undefined) delete globalThis.caches;
+    else globalThis.caches = savedCaches;
+    delete globalThis.caches?.__fake;
+  }
+
+  // 收尾：恢复一份宽松配置，别影响后面的用例
+  mock.reset();
+  await resetQuota();
+  await setConfig({ enabled: true, window: { enabled: true, mode: "inside", tz, days: [0, 1, 2, 3, 4, 5, 6], ranges: [["00:00", "23:59"]] }, guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50, maxPerDay: 500 } });
+}
+
 async function main() {
   installFetchMock();
   console.log("=== phone-notify 端到端测试（无网络、不真实拨号）===");
@@ -487,6 +598,7 @@ async function main() {
   await testFailureAndFallback();
   await testHealthAndLogs();
   await testModuleBoundary();
+  await testWindowSwitchAndPersistence();
 
   console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
   if (fail) {

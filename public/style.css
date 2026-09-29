@@ -227,3 +227,59 @@ input::placeholder { color: #5f5f5f; }
 .toast.show { opacity: 1; transform: translateY(0); }
 .toast.ok { border-left-color: var(--ok); }
 .toast.bad { border-left-color: var(--err); }
+
+/* ---------- 配置面板标签栏 ---------- */
+.tabs {
+  display: flex; flex-wrap: wrap; gap: 4px; padding: 4px;
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px;
+}
+.tab {
+  flex: 1 1 auto; min-width: 62px; padding: 6px 8px; font-size: 12px; cursor: pointer;
+  background: transparent; color: var(--fg-dim); border: 1px solid transparent; border-radius: 4px;
+  font-family: inherit;
+}
+.tab:hover { color: var(--fg); background: #2a2d2e; }
+.tab.active { color: #fff; background: var(--sel); border-color: var(--count); }
+.tabpane { display: none; }
+.tabpane.active { display: block; }
+
+/* ---------- 存储告警条 ---------- */
+.banner {
+  border-radius: 6px; padding: 9px 11px; font-size: 11.5px; line-height: 1.6;
+  border: 1px solid var(--border); border-left: 3px solid var(--warn);
+  background: #2b2b22; color: var(--fg); word-break: break-word;
+}
+.banner.bad { border-left-color: var(--err); background: #2e2320; }
+.banner.warn { border-left-color: var(--warn); background: #2b2b22; }
+.banner.hidden { display: none; }
+.banner code { font-family: var(--mono); color: var(--msg); background: #1b1b1c; padding: 1px 4px; border-radius: 3px; }
+
+/* ---------- 保存栏 ---------- */
+.save-bar { position: sticky; bottom: 12px; display: flex; align-items: center; gap: 10px; padding: 9px 12px; }
+.save-bar .save-state { flex: 1 1 auto; font-size: 11.5px; color: var(--fg-dim); }
+.save-state.dirty { color: var(--warn); }
+.save-state.saving { color: var(--info); }
+.save-state.saved { color: var(--ok); }
+.save-state.failed { color: var(--err); }
+.btn.pulse { animation: btnpulse 1.6s ease-in-out infinite; }
+@keyframes btnpulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(14,99,156,0); }
+  50% { box-shadow: 0 0 0 3px rgba(14,99,156,.45); }
+}
+
+/* ---------- 时间段开关联动 ---------- */
+#window-fields { display: flex; flex-direction: column; gap: 9px; }
+#window-fields.dim { opacity: .4; }
+#window-fields.dim input, #window-fields.dim select, #window-fields.dim button { pointer-events: none; }
+.panel-head .tag.ok { color: var(--ok); }
+
+/* ---------- 手动操作结果 ---------- */
+#op-result { margin-top: 2px; white-space: pre-wrap; word-break: break-word; }
+#op-result.ok { color: var(--ok); }
+#op-result.bad { color: var(--err); }
+
+@media (max-width: 1100px) {
+  .save-bar { position: static; }
+  .tab { min-width: 56px; }
+}
+

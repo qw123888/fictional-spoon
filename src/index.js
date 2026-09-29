@@ -1,5 +1,5 @@
 import { createStore } from "./core/store.js";
-import { loadConfig, loadStoredConfig, saveConfig, mergeClientPatch } from "./core/config.js";
+import { loadConfig, loadStoredConfig, saveConfig, mergeClientPatch, CONFIG_KEY } from "./core/config.js";
 import { EventLog } from "./core/logger.js";
 import { CommModule } from "./comm/index.js";
 import { handleSignal } from "./signal.js";
@@ -38,6 +38,24 @@ function maskKey(key) {
   if (!s) return "";
   if (s.length <= 10) return s.slice(0, 2) + "***";
   return `${s.slice(0, 6)}***${s.slice(-4)}`;
+}
+
+/** 出给前端的配置：密钥一律掩码 */
+function maskConfig(cfg) {
+  return {
+    ...cfg,
+    spug: { ...cfg.spug, appKey: maskKey(cfg.spug.appKey), devToken: maskKey(cfg.spug.devToken) }
+  };
+}
+
+/** 存储后端信息，前端据此提示"配置存不存得住" */
+function storageInfo(store) {
+  return {
+    persistent: store.persistent,
+    backend: store.backend,
+    label: store.backendLabel,
+    durable: store.backend === "cloudflare-kv"
+  };
 }
 
 async function readJson(request) {
@@ -131,17 +149,11 @@ export async function handleApi(request, env = {}) {
       const cfg = await comm.config();
       return json({
         ok: true,
-        config: {
-          ...cfg,
-          spug: {
-            ...cfg.spug,
-            appKey: maskKey(cfg.spug.appKey),
-            devToken: maskKey(cfg.spug.devToken)
-          }
-        },
+        config: maskConfig(cfg),
         hasAppKey: Boolean(cfg.spug.appKey),
         hasDevToken: Boolean(cfg.spug.devToken),
-        windowText: describeWindow(cfg)
+        windowText: describeWindow(cfg),
+        storage: storageInfo(store)
       });
     })();
   }
@@ -159,7 +171,28 @@ export async function handleApi(request, env = {}) {
       if (String(patch?.spug?.devToken || "").includes("***")) next.spug.devToken = stored.spug.devToken || current.spug.devToken;
       if (patch?.auth?.token !== undefined) await saveToken(store, patch.auth.token);
       await saveConfig(store, next);
-      return json({ ok: true, windowText: describeWindow(next), hasAppKey: Boolean(next.spug.appKey) });
+
+      // 写后校验：读回来比对。存不住就如实说"没保存成功"，别让界面显示一个骗人的"已保存"
+      const persisted = await store.verify(CONFIG_KEY, next);
+      const info = storageInfo(store);
+      if (!persisted) {
+        return json({
+          ok: false,
+          error: "not_persisted",
+          detail: `配置没能写进存储（当前后端：${info.label}）。请给 Worker 绑定一个 KV 命名空间（wrangler.toml 的 [[kv_namespaces]] 或控制台 Bindings → KV，变量名 NOTIFY_KV），再保存一次。`,
+          storage: info,
+          config: maskConfig(stored)
+        });
+      }
+      return json({
+        ok: true,
+        persisted: true,
+        config: maskConfig(next),
+        windowText: describeWindow(next),
+        hasAppKey: Boolean(next.spug.appKey),
+        hasDevToken: Boolean(next.spug.devToken),
+        storage: info
+      });
     })();
   }
 

@@ -94,11 +94,23 @@ export function evaluateWindow(cfg, date = new Date()) {
   const active = w.mode === "inside" ? inside : !inside;
   const span = w.ranges.map(([a, b]) => `${a}-${b}`).join("、");
   const dayText = w.days.length === 7 ? "每天" : w.days.map((d) => WEEKDAY_CN[d]).join("/");
+  // 时间段限制的总开关：关掉后不再看星期/区间，任何时间都允许拨打（防轰炸与通知总开关仍然生效）
+  if (w.enabled === false) {
+    return {
+      active: true,
+      allowed: true,
+      reason: "window_disabled",
+      disabled: true,
+      detail: `时间段限制已关闭：任何时间都可拨打（${w.tz} 现在 ${now.hhmm} ${WEEKDAY_CN[now.weekday]}）`,
+      now
+    };
+  }
   const detail = `${dayText} ${span}（${w.tz} 现在 ${now.hhmm} ${WEEKDAY_CN[now.weekday]}）`;
   return {
     active,
     allowed: active,
     reason: active ? "window_active" : "window_inactive",
+    disabled: false,
     detail,
     now
   };
@@ -107,6 +119,7 @@ export function evaluateWindow(cfg, date = new Date()) {
 /** 给界面用的一句话描述 */
 export function describeWindow(cfg) {
   const w = cfg.window;
+  if (w.enabled === false) return "时间段限制已关闭（任何时间都可拨打）";
   const span = w.ranges.map(([a, b]) => `${a}-${b}`).join("、");
   const dayText = w.days.length === 7 ? "每天" : w.days.map((d) => WEEKDAY_CN[d]).join("/");
   const modeText = w.mode === "inside" ? "仅在时间段内拨打" : "仅在时间段外拨打";

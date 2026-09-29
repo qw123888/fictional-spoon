@@ -57,17 +57,27 @@
   </section>
 
   <aside class="col-side">
-    <div class="panel">
-      <div class="panel-head"><h2>手动操作</h2></div>
+    <div class="banner hidden" id="storage-banner"></div>
+
+    <nav class="tabs" id="cfg-tabs">
+      <button class="tab active" data-tab="ops" type="button">操作</button>
+      <button class="tab" data-tab="window" type="button">时间段</button>
+      <button class="tab" data-tab="guard" type="button">防轰炸</button>
+      <button class="tab" data-tab="phone" type="button">电话接口</button>
+      <button class="tab" data-tab="fallback" type="button">备用通道</button>
+      <button class="tab" data-tab="auth" type="button">令牌</button>
+    </nav>
+
+    <!-- ---------- 操作 ---------- -->
+    <section class="panel tabpane active" data-pane="ops">
+      <div class="panel-head"><h2>手动操作</h2><span class="tag" id="ops-tag">不拨号的部分随便点</span></div>
       <div class="panel-body">
         <button class="btn primary wide" id="btn-test">📞 测试电话（真实拨号）</button>
         <button class="btn wide" id="btn-probe">🔍 电话接口自检（不拨号）</button>
         <button class="btn wide" id="btn-balance">📊 查询剩余语音分钟 / 余额</button>
         <div class="hint" id="op-result"></div>
       </div>
-    </div>
 
-    <div class="panel">
       <div class="panel-head"><h2>手动发信号</h2><span class="tag">走完整流程</span></div>
       <div class="panel-body">
         <label class="field"><span>标题</span><input id="sig-title" type="text" value="手动测试信号" maxlength="200"></label>
@@ -75,9 +85,7 @@
         <label class="check"><input type="checkbox" id="sig-force"> 强制发送（忽略时间段与去重）</label>
         <button class="btn wide" id="btn-send-signal">发送信号</button>
       </div>
-    </div>
 
-    <div class="panel">
       <div class="panel-head"><h2>通知总开关</h2></div>
       <div class="panel-body">
         <label class="switch">
@@ -85,41 +93,52 @@
           <span class="slider"></span>
           <span class="switch-text">允许自动电话通知</span>
         </label>
-        <div class="hint">关闭后只响应 <code>force</code> 信号与「测试电话」。</div>
+        <div class="hint">关闭后只响应 <code>force</code> 信号与「测试电话」。改完记得点下面的「保存配置」。</div>
       </div>
-    </div>
+    </section>
 
-    <div class="panel">
-      <div class="panel-head"><h2>自动电话时间段</h2></div>
+    <!-- ---------- 时间段 ---------- -->
+    <section class="panel tabpane" data-pane="window">
+      <div class="panel-head"><h2>自动电话时间段</h2><span class="tag" id="window-tag">—</span></div>
       <div class="panel-body">
-        <label class="field"><span>模式</span>
-          <select id="cfg-mode">
-            <option value="inside">仅在时间段内拨打</option>
-            <option value="outside">仅在时间段外拨打</option>
-          </select>
+        <label class="switch">
+          <input type="checkbox" id="cfg-window-enabled">
+          <span class="slider"></span>
+          <span class="switch-text">启用时间段限制</span>
         </label>
-        <label class="field"><span>时区</span>
-          <select id="cfg-tz">
-            <option value="Asia/Shanghai">Asia/Shanghai（北京时间）</option>
-            <option value="Asia/Tokyo">Asia/Tokyo</option>
-            <option value="UTC">UTC</option>
-            <option value="America/New_York">America/New_York</option>
-            <option value="Europe/London">Europe/London</option>
-          </select>
-        </label>
-        <div class="field-col">
-          <span class="lbl">星期</span>
-          <div class="days" id="cfg-days"></div>
-        </div>
-        <div class="field-col">
-          <span class="lbl">时间段（支持跨天，如 23:00 → 07:00）</span>
-          <div id="cfg-ranges" class="ranges"></div>
-          <button class="btn tiny" id="cfg-add-range">+ 添加时间段</button>
+        <div class="hint" id="window-hint">关闭后不再看星期和区间：<b>任何时间</b>都允许拨打（通知总开关与「防轰炸」仍然生效）。</div>
+
+        <div id="window-fields">
+          <label class="field"><span>模式</span>
+            <select id="cfg-mode">
+              <option value="inside">仅在时间段内拨打</option>
+              <option value="outside">仅在时间段外拨打</option>
+            </select>
+          </label>
+          <label class="field"><span>时区</span>
+            <select id="cfg-tz">
+              <option value="Asia/Shanghai">Asia/Shanghai（北京时间）</option>
+              <option value="Asia/Tokyo">Asia/Tokyo</option>
+              <option value="UTC">UTC</option>
+              <option value="America/New_York">America/New_York</option>
+              <option value="Europe/London">Europe/London</option>
+            </select>
+          </label>
+          <div class="field-col">
+            <span class="lbl">星期</span>
+            <div class="days" id="cfg-days"></div>
+          </div>
+          <div class="field-col">
+            <span class="lbl">时间段（支持跨天，如 23:00 → 07:00）</span>
+            <div id="cfg-ranges" class="ranges"></div>
+            <button class="btn tiny" id="cfg-add-range">+ 添加时间段</button>
+          </div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div class="panel">
+    <!-- ---------- 防轰炸 ---------- -->
+    <section class="panel tabpane" data-pane="guard">
       <div class="panel-head"><h2>触发控制（防轰炸）</h2></div>
       <div class="panel-body">
         <label class="field"><span>去重窗口(秒)</span><input id="cfg-dedupe" type="number" min="0" max="86400"></label>
@@ -128,9 +147,10 @@
         <label class="field"><span>每天上限</span><input id="cfg-maxday" type="number" min="1" max="2000"></label>
         <p class="hint">Spug 语音通道自身限流：<b>1 通/分钟、5 通/小时、20 通/天</b>（超了会被平台静默拦截，接口仍返回成功）。默认值已按此对齐。</p>
       </div>
-    </div>
+    </section>
 
-    <div class="panel">
+    <!-- ---------- 电话接口 ---------- -->
+    <section class="panel tabpane" data-pane="phone">
       <div class="panel-head"><h2>电话接口参数</h2></div>
       <div class="panel-body">
         <label class="field"><span>通道</span>
@@ -152,17 +172,19 @@
         <label class="field"><span>开发者Token</span><input id="cfg-devtoken" type="text" placeholder="只用于查余额与发送状态"></label>
         <div class="hint">两者都可放 Cloudflare Secret（<code>SPUG_APP_KEY</code> / <code>SPUG_DEV_TOKEN</code>），环境变量优先。App Key 用来打电话，开发者 Token 只能查余额和发送结果、不能发消息。</div>
       </div>
-    </div>
+    </section>
 
-    <div class="panel">
+    <!-- ---------- 备用通道 ---------- -->
+    <section class="panel tabpane" data-pane="fallback">
       <div class="panel-head"><h2>备用通道（电话挂了兜底）</h2></div>
       <div class="panel-body">
         <label class="check"><input type="checkbox" id="cfg-fallback-enabled"> 电话发送失败时转发到 Webhook</label>
         <label class="field"><span>Webhook</span><input id="cfg-fallback-url" type="url" placeholder="https://..."></label>
       </div>
-    </div>
+    </section>
 
-    <div class="panel">
+    <!-- ---------- 令牌 ---------- -->
+    <section class="panel tabpane" data-pane="auth">
       <div class="panel-head"><h2>访问令牌</h2></div>
       <div class="panel-body">
         <label class="field"><span>令牌</span><input id="token-input" type="password" placeholder="留空则不校验"></label>
@@ -172,10 +194,11 @@
         </div>
         <div class="hint">「本地使用」只存在浏览器里；电脑端发信号要用同一个令牌（请求头 <code>X-Auth-Token</code>）。</div>
       </div>
-    </div>
+    </section>
 
-    <div class="save-bar">
-      <button class="btn primary wide" id="btn-save">保存配置</button>
+    <div class="save-bar panel">
+      <span class="save-state" id="save-state">已同步</span>
+      <button class="btn primary" id="btn-save">保存配置</button>
     </div>
   </aside>
 </main>

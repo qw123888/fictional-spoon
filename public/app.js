@@ -12,7 +12,10 @@ const state = {
   token: localStorage.getItem("pn_token") || "",
   timerHealth: null,
   timerLogs: null,
-  timerBalance: null
+  timerBalance: null,
+  // 已保存配置的指纹：用来判断"有没有未保存的改动"
+  savedFp: "",
+  tab: localStorage.getItem("pn_tab") || "ops"
 };
 
 /* ---------------- 基础工具 ---------------- */
@@ -67,15 +70,38 @@ function card(key, value, detail = "", cls = "", valueCls = "") {
   </div>`;
 }
 
+/** 存储后端提示条：不是 KV 就把话说清楚，别让人以为"保存成功了" */
+function renderStorageBanner(storage) {
+  const el = $("storage-banner");
+  if (!el) return;
+  const s = storage || {};
+  if (!s.backend) {
+    el.className = "banner hidden";
+    return;
+  }
+  if (s.backend === "cloudflare-kv") {
+    el.className = "banner hidden";
+    el.textContent = "";
+    return;
+  }
+  el.className = `banner ${s.backend === "memory" ? "bad" : "warn"}`;
+  el.innerHTML =
+    s.backend === "memory"
+      ? `<b>配置存不住：</b>当前用的是内存存储，保存后换个实例就没了（这正是"点保存没反应、刷新要重填"的原因）。` +
+        `给 Worker 绑定 KV 就好了：wrangler.toml 的 <code>[[kv_namespaces]]</code> 填上 id，或控制台 Settings → Bindings 加 KV 变量 <code>NOTIFY_KV</code>。`
+      : `<b>存储：边缘缓存兜底。</b>配置能存住（不需要绑 KV），但不同机房可能读到稍旧的副本。想彻底稳就绑 KV。`;
+}
+
 function renderHealth(h) {
   state.health = h;
   const win = h.window || {};
   const guard = h.guard || {};
   const phone = h.phone || {};
   const last = phone.last;
+  const winOff = win.enabled === false;
 
-  const winCls = win.active ? "ok" : "warn";
-  const winValue = win.active ? "允许拨打" : "暂停中";
+  const winCls = winOff ? "warn" : win.active ? "ok" : "warn";
+  const winValue = winOff ? "限制已关闭" : win.active ? "允许拨打" : "暂停中";
   const phoneValue = phone.configured ? "已配置" : "未配置";
   const lastDetail = last
     ? `最近一次：${last.ok ? "成功" : "失败"} ${fmtTime(new Date(last.ts).toISOString())}${last.detail ? ` · ${last.detail.slice(0, 40)}` : ""}`
@@ -92,20 +118,27 @@ function renderHealth(h) {
 
   $("status-cards").innerHTML = [
     card("当前时间", `${h.now.iso} <span style="color:var(--fg-dim)">${WEEKDAYS[h.now.weekday] || ""}</span>`, `时区 ${h.now.tz}`, "", "big"),
-    card("自动通知时间段", winValue, win.detail || "", winCls, win.active ? "big" : "big"),
+    card("自动通知时间段", winValue, win.detail || "", winCls, winOff ? "big" : win.active ? "big" : "big"),
     card("已拨打通话", `${guard.usedToday ?? 0} / ${guard.maxPerDay ?? "-"} <span style="color:var(--fg-dim)">(今天)</span>`, `本小时 ${guard.usedThisHour ?? 0}/${guard.maxPerHour ?? "-"}${guard.lastSendAt ? ` · 上次：${fmtTime(guard.lastSendAt)}` : " · 本小时尚未拨打"}`, "", "count"),
     card("剩余语音", balValue, balDetail, balCls, "count"),
     card("电话接口", phoneValue, lastDetail, phone.configured ? "" : "warn"),
     card("通知总开关", h.enabled ? "已开启" : "已关闭", h.enabled ? "收到信号会按时间段拨打" : "仅 force 信号可穿透", h.enabled ? "ok" : "warn"),
-    card("存储 / 令牌", h.storage.backend === "cloudflare-kv" ? "KV 持久化" : "内存（临时）", `${h.auth.configured ? "令牌已设置" : "⚠ 未设置令牌，站点开放"}`, h.auth.configured ? "" : "warn")
+    card("存储 / 令牌", h.storage.label || (h.storage.backend === "cloudflare-kv" ? "KV 持久化" : "内存（临时）"), `${h.auth.configured ? "令牌已设置" : "⚠ 未设置令牌，站点开放"}`, h.auth.configured ? (h.storage.durable ? "" : "warn") : "warn")
   ].join("");
 
-  $("win-pill").textContent = `时间段：${win.active ? "可拨打" : "暂停"}`;
-  $("win-pill").className = `pill ${win.active ? "on" : "off"}`;
+  $("win-pill").textContent = winOff ? "时间段：已关闭限制" : `时间段：${win.active ? "可拨打" : "暂停"}`;
+  $("win-pill").className = `pill ${winOff ? "off" : win.active ? "on" : "off"}`;
   $("quota-pill").textContent = `今天 ${guard.usedToday ?? 0}/${guard.maxPerDay ?? "-"} · 本小时 ${guard.usedThisHour ?? 0}/${guard.maxPerHour ?? "-"}`;
-  $("storage-pill").textContent = `存储：${h.storage.backend === "cloudflare-kv" ? "KV" : "内存"}`;
-  $("storage-pill").className = `pill ${h.storage.persistent ? "on" : "off"}`;
+  $("storage-pill").textContent = `存储：${h.storage.backend === "cloudflare-kv" ? "KV" : h.storage.backend === "edge-cache" ? "缓存" : "内存"}`;
+  $("storage-pill").className = `pill ${h.storage.durable ? "on" : h.storage.backend === "edge-cache" ? "" : "bad"}`;
   $("live-dot").className = `dot ${phone.configured ? "live" : "bad"}`;
+
+  const tag = $("window-tag");
+  if (tag) {
+    tag.textContent = winOff ? "限制已关闭" : win.active ? "当前：可拨打" : "当前：暂停";
+    tag.className = `tag ${winOff || !win.active ? "" : "ok"}`;
+  }
+  renderStorageBanner(h.storage);
 }
 
 /* ---------------- 配置表单 ---------------- */
@@ -128,9 +161,25 @@ function addRangeRow(from = "08:00", to = "23:00") {
   $("cfg-ranges").appendChild(row);
 }
 
+function applyWindowEnabledUI() {
+  const on = $("cfg-window-enabled").checked;
+  const box = $("window-fields");
+  if (box) box.classList.toggle("dim", !on);
+  [...(box ? box.querySelectorAll("input, select, button") : [])].forEach((el) => {
+    el.disabled = !on;
+  });
+  const hint = $("window-hint");
+  if (hint) {
+    hint.innerHTML = on
+      ? "当前：只在勾选的星期与时间段内拨打（「仅在时间段外」= 反选）。"
+      : "当前：<b>限制已关闭，任何时间都会拨打</b>（通知总开关与「防轰炸」仍然生效）。";
+  }
+}
+
 function fillConfig(cfg) {
   state.config = cfg;
   $("cfg-enabled").checked = Boolean(cfg.enabled);
+  $("cfg-window-enabled").checked = cfg.window.enabled !== false;
   $("cfg-mode").value = cfg.window.mode;
   const tzSel = $("cfg-tz");
   if (![...tzSel.options].some((o) => o.value === cfg.window.tz)) {
@@ -157,6 +206,11 @@ function fillConfig(cfg) {
 
   $("cfg-fallback-enabled").checked = Boolean(cfg.fallback.enabled);
   $("cfg-fallback-url").value = cfg.fallback.webhookUrl || "";
+
+  applyWindowEnabledUI();
+  // 以服务器回填后的表单为准记录指纹：此刻表单 = 已保存状态
+  state.savedFp = JSON.stringify(collectConfig());
+  setSaveState("saved");
 }
 
 function collectConfig() {
@@ -166,7 +220,7 @@ function collectConfig() {
   const days = [...document.querySelectorAll("#cfg-days input:checked")].map((i) => Number(i.value));
   return {
     enabled: $("cfg-enabled").checked,
-    window: { mode: $("cfg-mode").value, tz: $("cfg-tz").value, days, ranges },
+    window: { enabled: $("cfg-window-enabled").checked, mode: $("cfg-mode").value, tz: $("cfg-tz").value, days, ranges },
     guard: {
       dedupeSeconds: Number($("cfg-dedupe").value),
       minIntervalSeconds: Number($("cfg-mininterval").value),
@@ -184,6 +238,57 @@ function collectConfig() {
     fallback: { enabled: $("cfg-fallback-enabled").checked, webhookUrl: $("cfg-fallback-url").value.trim() },
     spug: { appKey: $("cfg-appkey").value.trim(), devToken: $("cfg-devtoken").value.trim() }
   };
+}
+
+/* ---------------- 面板切换 / 保存状态 ---------------- */
+function switchTab(name, { save = true } = {}) {
+  const tabs = [...document.querySelectorAll("#cfg-tabs .tab")];
+  if (!tabs.some((t) => t.dataset.tab === name)) name = "ops";
+  tabs.forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  document.querySelectorAll(".tabpane").forEach((p) => p.classList.toggle("active", p.dataset.pane === name));
+  state.tab = name;
+  if (save) localStorage.setItem("pn_tab", name);
+}
+
+function setSaveState(kind, text) {
+  const el = $("save-state");
+  const btn = $("btn-save");
+  if (!el || !btn) return;
+  el.className = `save-state ${kind}`;
+  if (kind === "dirty") {
+    el.textContent = text || "有未保存的改动";
+    btn.textContent = "保存配置";
+    btn.classList.add("pulse");
+  } else if (kind === "saving") {
+    el.textContent = "保存中…";
+    btn.textContent = "保存中…";
+  } else if (kind === "saved") {
+    el.textContent = text || "已同步";
+    btn.textContent = "保存配置";
+    btn.classList.remove("pulse");
+  } else if (kind === "failed") {
+    el.textContent = text || "保存失败";
+    btn.textContent = "重试保存";
+    btn.classList.add("pulse");
+  }
+}
+
+/** 表单和"已保存的配置"不一致时点亮提示 */
+function markDirty() {
+  if (!state.config) return false;
+  let fp = "";
+  try {
+    fp = JSON.stringify(collectConfig());
+  } catch (e) {
+    return false;
+  }
+  state.dirtyFp = fp;
+  if (state.savedFp && fp === state.savedFp) {
+    setSaveState("saved");
+    return false;
+  }
+  setSaveState("dirty");
+  return true;
 }
 
 /* ---------------- 日志渲染 ---------------- */
@@ -308,16 +413,39 @@ async function doSendSignal() {  const body = {
 
 async function doSave() {
   const btn = $("btn-save");
+  const body = collectConfig();
   btn.disabled = true;
-  const { data } = await api("/api/config", { method: "POST", body: collectConfig() });
+  setSaveState("saving");
+  const { data, status } = await api("/api/config", { method: "POST", body });
   btn.disabled = false;
-  if (data && data.ok) {
-    toast("配置已保存", "ok");
-    await refreshConfig();
-    await refreshHealth();
-  } else {
-    toast(`保存失败：${(data && (data.detail || data.error)) || "未知错误"}`, "bad");
+
+  if (!data) {
+    setSaveState("failed", `保存失败（HTTP ${status || "?"}）`);
+    toast(`保存失败：站点没返回数据（HTTP ${status || "?"}）`, "bad");
+    return;
   }
+  if (data.ok && data.persisted) {
+    // 用服务器真实存下来的配置回填，避免"界面显示的值"和"实际生效的值"不一致
+    if (data.config) fillConfig(data.config);
+    else {
+      state.savedFp = JSON.stringify(collectConfig());
+      setSaveState("saved");
+    }
+    const t = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    setSaveState("saved", `已保存 ${t}`);
+    toast("配置已保存（已写入存储）", "ok");
+    refreshHealth();
+    return;
+  }
+  if (data.error === "not_persisted") {
+    state.savedFp = ""; // 明确保持"未保存"
+    setSaveState("failed", "没存住：存储不可用");
+    renderStorageBanner(data.storage || state.health?.storage);
+    toast(data.detail || "配置没能写进存储，请先给 Worker 绑定 KV", "bad");
+    return;
+  }
+  setSaveState("failed", `保存失败：${data.detail || data.error || "未知错误"}`);
+  toast(`保存失败：${data.detail || data.error || "未知错误"}`, "bad");
 }
 
 /* ---------------- 时钟 ---------------- */
@@ -345,6 +473,40 @@ function bind() {
     refreshLogs();
   });
   $("cfg-add-range").addEventListener("click", () => addRangeRow());
+
+  // 面板切换：点标签页只换显示，不再把所有配置挤在一个长条里
+  document.querySelectorAll("#cfg-tabs .tab").forEach((tab) => {
+    tab.addEventListener("click", () => switchTab(tab.dataset.tab));
+  });
+
+  // 时间段总开关：关掉后把下面的星期/区间置灰，避免误以为还在生效
+  $("cfg-window-enabled").addEventListener("change", () => {
+    applyWindowEnabledUI();
+    markDirty();
+  });
+
+  // 任何输入变化都刷新"未保存"提示（事件委托，新增的时间段行也能覆盖）
+  // 手动发信号/令牌那几个框不属于配置，别把它们算成"未保存的改动"
+  const onConfigInput = (e) => {
+    const t = e.target;
+    if (!t || !t.closest) return;
+    if (t.closest("#sig-title, #sig-content, #sig-force, #token-input, .save-bar")) return;
+    markDirty();
+  };
+  document.querySelector(".col-side").addEventListener("input", onConfigInput);
+  document.querySelector(".col-side").addEventListener("change", onConfigInput);
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      doSave();
+    }
+  });
+  window.addEventListener("beforeunload", (e) => {
+    if (state.savedFp && state.dirtyFp && state.dirtyFp !== state.savedFp) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
 
   $("btn-token-apply").addEventListener("click", () => {
     state.token = $("token-input").value.trim();
@@ -389,6 +551,7 @@ function bind() {
 
 async function main() {
   bind();
+  switchTab(state.tab, { save: false });
   tickClock();
   setInterval(tickClock, 1000);
 

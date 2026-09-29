@@ -78,7 +78,11 @@ $dirty = git status --porcelain
 if ($dirty) {
   Write-Host "有未提交的改动，先提交：" -ForegroundColor Yellow
   $dirty -split "`n" | Where-Object { $_.Trim() } | ForEach-Object { Write-Host "  $($_.TrimEnd())" }
-  git add -A | Out-Null
+  $prevAdd = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  git add -A 2>&1 | Out-Null
+  $ErrorActionPreference = $prevAdd
+  if ($LASTEXITCODE -ne 0) { Fail "git add -A 失败（exit $LASTEXITCODE）" }
   if ([string]::IsNullOrWhiteSpace($Message)) {
     $Message = "本地改动：" + (Get-Date -Format "yyyy-MM-dd HH:mm")
   }

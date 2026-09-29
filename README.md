@@ -46,14 +46,16 @@ fictional-spoon/
 │     ├─ config.js             # 配置读写 + 默认值 + 客户端补丁合并
 │     ├─ window.js             # 通知时间段（时区 / 星期 / 多区间 / 跨天）
 │     ├─ guard.js              # 防轰炸：去重、最小间隔、每小时/每天上限（默认对齐 Spug 流控）
-│     ├─ store.js              # KV（未绑定 KV 时自动退化为内存）
+│     ├─ store.js              # 三级存储：KV → 边缘缓存(Cache API) → 内存
 │     ├─ logger.js             # 通知日志 + 计数
 │     └─ auth.js               # 访问令牌
-├─ public/                     # 控制台界面（index.html / style.css / app.js）
+├─ public/                     # 控制台界面（index.html 分页面板 / style.css / app.js）
 ├─ functions/api/[[route]].js  # 若改用 Cloudflare Pages，走这个适配入口
 ├─ pc/notify_bridge.py         # 电脑端桥接模块（同步副本，源头在监听器目录）
 ├─ local/server.mjs            # 本地开发服务器（Node，无需 wrangler）
-├─ test/run.mjs                # 71 项自动化测试（mock 掉电话接口，不拨号）
+├─ test/run.mjs                # 后端自动化测试（mock 掉电话接口，不拨号）
+├─ test/dom-smoke.mjs          # 前端烟雾测试：真的跑 app.js 验面板切换与保存反馈
+├─ test/check-dom.mjs          # 接线自检：JS 引用的 id 在 HTML 里都存在
 ├─ wrangler.toml
 └─ package.json
 ```
@@ -65,6 +67,8 @@ fictional-spoon/
 ```bash
 npm install
 npm run dev          # → http://127.0.0.1:8787
+npm test             # 后端测试（不需要网络、不会拨号）
+npm run test:dom     # 前端烟雾测试（需先 npm i -D linkedom，可选）
 ```
 
 `local/server.mjs` 会把请求喂给同一份 Worker 代码，并把 KV 落盘到 `local/data/kv.json`，
@@ -209,10 +213,15 @@ Workers & Pages → Pages → 连接到 Git → 框架预设 **None**、构建�
 
 补充：
 
-- **不绑定 KV 也能跑**：内存模式，但配置和日志会在实例重启/切换时丢失，控制台会显示「内存（临时）」。
+- **不绑定 KV 也能存住配置**：代码按 `KV → 边缘缓存(Cache API) → 内存` 三级自动降级。没绑 KV 时用边缘缓存，
+  刷新页面配置还在（控制台顶部胶囊显示「存储：缓存」）。绑定 KV 才是跨机房一致的强持久化（显示「存储：KV」）。
+  三级都不可用时，点「保存配置」会**明确报错**「没存住」，不会再假装保存成功。
+- **时间段有总开关**：右侧「时间段」面板里的开关关掉后，不再看星期与区间，任何时间都可拨打
+  （通知总开关与「防轰炸」仍然生效）。配置面板按「操作 / 时间段 / 防轰炸 / 电话接口 / 备用通道 / 令牌」分页，
+  改动会在底部保存栏显示「有未保存的改动」，随时可 `Ctrl+S` 保存。
 - **令牌优先级**：环境变量 `SIGNAL_TOKEN` > 控制台里保存的令牌。部署时用 secret 下发更安全，
   浏览器端只要在「访问令牌」里填同样的值即可（本地 localStorage 保存，不落库）。
-- 想绑自定义域名：Cloudflare 控制台 → Workers → 该项目 → Settings → Domains & Routes → Add。
+- 想绑自定义域名：Cloudflare 控制台 → Workers → 该项目 → Settings & Domains & Routes → Add。
 
 ---
 
@@ -292,7 +301,8 @@ comm.register(new SmsAdapter(cfg));   // 非 ChannelAdapter 实例会被拒绝
 | 电话不响、`code` 提示手机号未授权 | Spug 要求机主先完成「防骚扰授权」（扫码后发短信确认），否则语音通道对该号码不可用。 |
 | `code` 提示渠道未开启 / App Key 未授权 | 在 Spug 控制台开启 voice 通道，并确认 App Key 的权限范围包含语音。 |
 | 被手机系统拦截 | Spug 语音主叫号：`021 31443892`、`021 32199761`、`0371 55969643`，可加白名单或关拦截。 |
-| 网页显示「内存（临时）」 | 没有绑定 KV（`wrangler.toml` 里 `id` 为空）。绑定后配置与日志才会持久化。 |
+| 网页显示「内存（临时 / 边缘缓存）」 | 没有绑定 KV（`wrangler.toml` 里 `id` 为空）。现在会自动降级到**边缘缓存**（刷新后配置还在），绑定 KV 才是跨机房强持久化。 |
+| **点「保存配置」没反应 / 刷新页面配置又变回默认** | 老版本因为后端是内存存储、且接口无条件返回 `ok:true`（假装保存成功）。现已修复：点保存会有明确反馈（`已保存 HH:MM:SS` / `没存住：存储不可用` + 顶部红条），并且没绑 KV 时自动用边缘缓存兜底。若仍报 `not_persisted`，说明 KV 与缓存都不可用，照红条提示绑定 KV。 |
 | 网页 401 | 浏览器「访问令牌」里的值与环境变量 `SIGNAL_TOKEN` 不一致（环境变量优先）。 |
 | 剩余语音显示「查询失败 / 未配置开发者 Token」 | 查余额和发送状态**只能**用 Spug 控制台的「开发者 Token」（App Key 不行）：填到控制台「电话接口参数 → 开发者Token」，或 `wrangler secret put SPUG_DEV_TOKEN`。 |
 | 剩余语音 0 分钟 | 语音是计费通道，去 Spug 控制台充值或买语音资源包；控制台会在 ≤3 分钟时弹红色提醒。 |

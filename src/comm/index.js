@@ -192,9 +192,16 @@ export class CommModule {
       ok: true,
       now: { iso: win.now.hhmm, date: win.now.dateKey, weekday: win.now.weekday, tz: cfg.window.tz },
       enabled: cfg.enabled,
-      window: { active: win.active, detail: win.detail, description: describeWindow(cfg) },
+      window: { active: win.active, detail: win.detail, description: describeWindow(cfg), enabled: cfg.window.enabled !== false, disabled: Boolean(win.disabled) },
       guard,
-      storage: { persistent: this.store.persistent, backend: this.store.persistent ? "cloudflare-kv" : "memory" },
+      storage: {
+        persistent: this.store.persistent,
+        backend: this.store.backend,
+        label: this.store.backendLabel,
+        // 不是 KV 时界面要提示"配置可能丢"，别让用户以为保存成功了
+        durable: this.store.backend === "cloudflare-kv",
+        warn: this.store.backend === "memory" ? "当前是内存存储，配置/日志在重启或换机房后会丢：请绑定 KV，或改用边缘缓存" : this.store.backend === "edge-cache" ? "当前用边缘缓存兜底（不绑 KV 也能存住），但换机房可能读到稍旧的副本；建议绑定 KV" : ""
+      },
       auth: { configured: token },
       phone: { configured: Boolean(cfg.spug.appKey), last: phone },
       adapters: this.adapters()

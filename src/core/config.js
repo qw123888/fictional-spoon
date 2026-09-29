@@ -21,6 +21,7 @@ export const DEFAULT_CONFIG = {
   },
   // 自动电话时间段
   window: {
+    enabled: true,           // 时间段限制的总开关：关掉后任何时间都拨打（防轰炸仍生效）
     mode: "inside",          // inside = 仅时间段内拨打；outside = 仅时间段外拨打
     tz: "Asia/Shanghai",
     days: [0, 1, 2, 3, 4, 5, 6],   // 0=周日
@@ -95,6 +96,7 @@ export function normalizeConfig(input = {}) {
   c.phone.titlePrefix = String(c.phone.titlePrefix ?? "").slice(0, 32);
   c.phone.contentLimit = clampInt(c.phone.contentLimit, 20, 500, 120);
 
+  c.window.enabled = c.window.enabled === undefined ? DEFAULT_CONFIG.window.enabled : Boolean(c.window.enabled);
   c.window.mode = c.window.mode === "outside" ? "outside" : "inside";
   c.window.tz = String(c.window.tz || "Asia/Shanghai").trim() || "Asia/Shanghai";
   const days = Array.isArray(c.window.days)
