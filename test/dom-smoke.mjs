@@ -199,6 +199,20 @@ eq($("cfg-maxday").value, "9", "表单显示的是本浏览器草稿里的 9，�
 ok($("storage-banner").textContent.includes("草稿"), "告警条说明当前是本浏览器草稿（未生效到服务器）");
 ok(posts.length >= 1, "草稿会自动重发一次给服务器（当前实例先按草稿跑）");
 
+console.log("\n[6] 服务器能存住但有旧草稿：给按钮回填，不偷偷覆盖");
+saveMode = "kv";
+ls.set(
+  "pn_cfg",
+  JSON.stringify({ t: Date.now(), cfg: { ...DEFAULT_CONFIG, guard: { ...DEFAULT_CONFIG.guard, maxPerDay: 11 } } })
+);
+$("btn-token-apply").dispatchEvent(new window.Event("click", { bubbles: true }));
+for (let i = 0; i < 60; i++) await new Promise((r) => setTimeout(r, 5));
+eq($("save-state").className.includes("dirty"), false, "服务器能存住时不假装未保存（不自动覆盖服务器配置）");
+eq($("btn-draft").hidden, false, "出现「用草稿回填」按钮（草稿和服务器不一致）");
+$("btn-draft").dispatchEvent(new window.Event("click", { bubbles: true }));
+eq($("cfg-maxday").value, "11", "点一下把草稿里的 11 填进表单");
+eq($("save-state").className.includes("dirty"), true, "回填后标记为「有未保存的改动」，等用户确认再写服务器");
+
 console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
 if (fail) {
   console.log("失败项：" + failures.join(" / "));

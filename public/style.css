@@ -227,6 +227,7 @@ input::placeholder { color: #5f5f5f; }
 .toast.show { opacity: 1; transform: translateY(0); }
 .toast.ok { border-left-color: var(--ok); }
 .toast.bad { border-left-color: var(--err); }
+.toast.warn { border-left-color: var(--warn); }
 
 /* ---------- 配置面板标签栏 ---------- */
 .tabs {

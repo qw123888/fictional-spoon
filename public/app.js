@@ -83,6 +83,33 @@ function readDraft() {
   }
 }
 
+/** 键顺序无关的序列化，用来比较"草稿 vs 服务器配置" */
+function sortedJson(v) {
+  return JSON.stringify(v, (k, val) =>
+    val && typeof val === "object" && !Array.isArray(val)
+      ? Object.keys(val)
+          .sort()
+          .reduce((o, kk) => ((o[kk] = val[kk]), o), {})
+      : val
+  );
+}
+
+/** 服务器能存住、但本浏览器留着旧草稿时，给一个「用草稿回填」的按钮（不自动覆盖，避免误伤） */
+function renderDraftButton(serverCfg, { autoApplied = false } = {}) {
+  const btn = $("btn-draft");
+  if (!btn) return;
+  const draft = readDraft();
+  const differs = draft && sortedJson(draft.cfg) !== sortedJson(serverCfg);
+  if (!draft || !differs || autoApplied) {
+    btn.hidden = true;
+    return;
+  }
+  btn.hidden = false;
+  const t = fmtTime(new Date(draft.t).toISOString());
+  btn.title = `本浏览器草稿（${t}）和服务器里的配置不一样，点一下把草稿填进表单`;
+  btn.textContent = `用草稿回填（${t}）`;
+}
+
 /* ---------------- 状态渲染 ---------------- */
 function card(key, value, detail = "", cls = "", valueCls = "") {
   return `<div class="card ${cls}">
@@ -368,11 +395,15 @@ async function refreshConfig() {
   // 服务器存不住（没绑 KV）时，用本浏览器草稿顶上：
   // 界面不至于一刷新就回到默认值，并把草稿自动重发一次（当前实例先按草稿跑）。
   const storage = data.storage || {};
-  if (storage.durable) return;
+  if (storage.durable) {
+    renderDraftButton(data.config);
+    return;
+  }
   const draft = readDraft();
   if (!draft) return;
   fillConfig(draft.cfg);
   setSaveState("dirty", `已用本浏览器草稿回填（${fmtTime(new Date(draft.t).toISOString())}）`);
+  renderDraftButton(data.config, { autoApplied: true });
   await doSave({ silent: true });
 }
 
@@ -468,6 +499,7 @@ async function doSave({ silent = false } = {}) {
       if (!silent) toast("已保存；但没绑 KV，配置随时可能退回默认值", "bad");
     } else {
       setSaveState("saved", `已保存 ${t}`);
+      renderDraftButton(data.config);
       if (!silent) toast("配置已保存（已写入存储）", "ok");
     }
     refreshHealth();
@@ -501,6 +533,13 @@ function bind() {
   $("btn-balance").addEventListener("click", () => doBalance(false));
   $("btn-send-signal").addEventListener("click", doSendSignal);
   $("btn-save").addEventListener("click", doSave);
+  $("btn-draft").addEventListener("click", () => {
+    const draft = readDraft();
+    if (!draft) return;
+    fillConfig(draft.cfg);
+    setSaveState("dirty", `已用草稿回填表单（${fmtTime(new Date(draft.t).toISOString())}），点「保存配置」写进服务器`);
+    toast("已用本浏览器草稿回填，别忘了点「保存配置」", "warn");
+  });
   $("btn-refresh").addEventListener("click", () => {
     refreshHealth();
     refreshLogs();
