@@ -10,13 +10,51 @@
 param(
   [string]$Repo = "qw123888/fictional-spoon",
   [string]$Branch = "main",
-  [string]$Token = ""
+  [string]$Token = "",
+  [switch]$Check
 )
 
 $ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Set-Location -Path $PSScriptRoot
 
 function Say($msg, $color = "Gray") { Write-Host $msg -ForegroundColor $color }
+
+# 调 GitHub API，返回 @{code=HTTP状态码; data=对象或错误文本}
+function HttpJson($method, $url, $bodyObj) {
+  $headers = @{
+    Authorization = "Bearer $Token"
+    "User-Agent"  = "phone-notify-push"
+    Accept        = "application/vnd.github+json"
+  }
+  try {
+    if ($null -ne $bodyObj) {
+      $json = $bodyObj | ConvertTo-Json -Compress
+      $r = Invoke-RestMethod -Method $method -Uri $url -Headers $headers -Body $json -ContentType "application/json" -TimeoutSec 20
+    } else {
+      $r = Invoke-RestMethod -Method $method -Uri $url -Headers $headers -TimeoutSec 20
+    }
+    return @{ code = 200; data = $r }
+  } catch {
+    $code = 0
+    $txt = ""
+    $resp = $_.Exception.Response
+    if ($resp) {
+      try { $code = [int]$resp.StatusCode } catch { $code = 0 }
+    }
+    # PowerShell 5.1：错误响应体放在 ErrorDetails 里
+    if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $txt = $_.ErrorDetails.Message }
+    if (-not $txt -and $resp) {
+      try {
+        $sr = New-Object System.IO.StreamReader($resp.GetResponseStream())
+        $txt = $sr.ReadToEnd()
+        $sr.Close()
+      } catch { $txt = "" }
+    }
+    if (-not $txt) { $txt = $_.Exception.Message }
+    return @{ code = $code; data = $txt }
+  }
+}
 
 Say "=== 电话通知站 → GitHub 推送 ===" "Cyan"
 Say "仓库：$Repo    分支：$Branch"
@@ -37,6 +75,46 @@ if (-not $Token) {
 $Token = ($Token -replace "\s", "")
 if (-not $Token) { Say "没有令牌，已取消。" "Red"; exit 1 }
 if ($Token.Length -lt 20) { Say "令牌看起来太短（$($Token.Length) 位），GitHub PAT 通常 40 位以上。仍继续…" "Yellow" }
+
+# ---------- 1.5 令牌预检（不改动仓库、不产生提交）----------
+Say ""
+Say "预检令牌…" "Cyan"
+
+$who = HttpJson "GET" "https://api.github.com/user" $null
+if ($who.code -ne 200) {
+  Say "  令牌无效或已过期（HTTP $($who.code)）：$($who.data)" "Red"
+  exit 3
+}
+Say "  身份：$($who.data.login)（$($who.data.type)）" "Green"
+if ($who.data.login -ne ($Repo -split "/")[0]) {
+  Say "  !! 注意：令牌属于 $($who.data.login)，而目标仓库属于 $(($Repo -split '/')[0])" "Yellow"
+  Say "     只有在你是该仓库协作者时才推得动。" "Yellow"
+}
+
+# 用 git/blobs 探针验写权限：只创建一个没人引用的 blob，不留提交、不留分支
+$probe = HttpJson "POST" "https://api.github.com/repos/$Repo/git/blobs" @{ content = "permcheck"; encoding = "utf-8" }
+if ($probe.code -eq 201) {
+  Say "  写权限：OK（Contents: Read and write）" "Green"
+} else {
+  Say "  写权限：被拒（HTTP $($probe.code)）" "Red"
+  Say "  GitHub 说：$($probe.data)" "DarkGray"
+  Say ""
+  Say "这个令牌没有本仓库的写入权限。去改（30 秒）：" "Yellow"
+  Say "  https://github.com/settings/personal-access-tokens" "Yellow"
+  Say "  点开这个令牌 → Repository access 选「Only select repositories」并勾上 fictional-spoon" "Yellow"
+  Say "  → Permissions → Repository permissions → Contents 改成 Read and write → Save" "Yellow"
+  Say "  （如果是 fine-grained 且只能选「Public Repositories」，则新建一个经典令牌：" "Yellow"
+  Say "    https://github.com/settings/tokens/new?scopes=repo&description=phone-notify ）" "Yellow"
+  Say ""
+  Say "改完重新运行本脚本即可。想看新令牌行不行：.\push-github.bat -Check" "Yellow"
+  exit 3
+}
+
+if ($Check) {
+  Say ""
+  Say "预检通过，令牌可用（-Check 模式，没有推送任何东西）。" "Green"
+  exit 0
+}
 
 # ---------- 2. 提交待推送内容 ----------
 $dirty = git status --porcelain
