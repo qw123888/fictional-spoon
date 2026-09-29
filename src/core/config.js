@@ -151,3 +151,15 @@ export async function saveConfig(store, cfg) {
   await store.set(CONFIG_KEY, cfg);
   return cfg;
 }
+
+/**
+ * 总开关：只改 enabled 这一个字段，不碰其它配置（一键开关专用）
+ * 返回 { before, cfg, changed, persisted } —— persisted=false 时调用方必须如实告知"没存住"
+ */
+export async function setMasterEnabled(store, on) {
+  const before = await loadStoredConfig(store);
+  const next = normalizeConfig({ ...before, enabled: Boolean(on) });
+  await saveConfig(store, next);
+  const persisted = await store.verify(CONFIG_KEY, next);
+  return { before, cfg: next, changed: next.enabled !== before.enabled, persisted };
+}

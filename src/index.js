@@ -1,5 +1,5 @@
 import { createStore } from "./core/store.js";
-import { loadConfig, loadStoredConfig, saveConfig, mergeClientPatch, CONFIG_KEY } from "./core/config.js";
+import { loadConfig, loadStoredConfig, saveConfig, setMasterEnabled, mergeClientPatch, CONFIG_KEY } from "./core/config.js";
 import { EventLog } from "./core/logger.js";
 import { CommModule } from "./comm/index.js";
 import { handleSignal } from "./signal.js";
@@ -111,6 +111,59 @@ export async function handleApi(request, env = {}) {
       if (body === null) return json({ ok: false, error: "bad_json", detail: "请求体不是合法 JSON" }, 400);
       const result = await handleSignal(comm, body);
       return json(result);
+    })();
+  }
+
+  // ---------- 总开关（一键开 / 关，只动 enabled 一个字段）----------
+  // 独立接口而不是复用 /api/config：总开关是"操作"，不该顺带覆盖整份配置，
+  // 也方便任何客户端（电脑端、手机快捷指令）一行请求切掉电话通知。
+  if (path === "/api/switch" && method === "GET") {
+    return needAuth(async () => {
+      const cfg = await comm.config();
+      return json({ ok: true, enabled: Boolean(cfg.enabled), storage: storageInfo(store) });
+    })();
+  }
+
+  if (path === "/api/switch" && method === "POST") {
+    return needAuth(async () => {
+      const body = await readJson(request);
+      if (body === null) return json({ ok: false, error: "bad_json", detail: "请求体不是合法 JSON" }, 400);
+      const stored = await loadStoredConfig(store);
+      const hasOn = body.on !== undefined || body.enabled !== undefined || body.value !== undefined;
+      if (!hasOn && !body.toggle) {
+        return json({ ok: false, error: "bad_param", detail: "给 on:true/false 直接设定，或给 toggle:true 取反" }, 400);
+      }
+      const want = body.toggle ? !stored.enabled : Boolean(body.on ?? body.enabled ?? body.value);
+      const r = await setMasterEnabled(store, want);
+      const info = storageInfo(store);
+      if (!r.persisted || info.backend === "memory") {
+        return json({
+          ok: false,
+          error: "not_persisted",
+          detail: `总开关没能写进存储（当前后端：${info.label}）。${KV_STEPS}`,
+          enabled: stored.enabled,
+          changed: false,
+          storage: info
+        });
+      }
+      await log.push({
+        level: r.cfg.enabled ? "ok" : "warn",
+        title: `电话通知总开关：${r.cfg.enabled ? "开启" : "关闭"}`,
+        content: r.changed ? `操作前为${r.before.enabled ? "开启" : "关闭"}` : "状态未变化",
+        source: "master-switch",
+        route: "local",
+        ok: r.cfg.enabled,
+        detail: r.cfg.enabled ? "收到信号会按时间段拨打" : "仅 force 信号与测试电话可穿透"
+      });
+      return json({
+        ok: true,
+        enabled: r.cfg.enabled,
+        changed: r.changed,
+        persisted: true,
+        durable: info.durable,
+        warning: info.durable ? "" : info.hint,
+        storage: info
+      });
     })();
   }
 

@@ -228,6 +228,9 @@ Workers & Pages → Pages → 连接到 Git → 框架预设 **None**、构建�
   刷新页面会用这份草稿回填表单（顶部红条标注「本浏览器草稿」）并自动重发一次，
   所以不会再出现"刷新就得重新填"。服务器能存住、但本地还留着不一样的旧草稿时，
   底部保存栏会出现「用草稿回填（时间）」按钮，点了才填进表单（不会偷偷覆盖服务器配置）。
+- **顶栏有总开关**：页面右上角「电话通知」开关点一下**立刻生效**（走 `/api/switch`，只改 `enabled` 一个字段，
+  不会碰你正在改的表单），关掉后所有自动通知都停，只有「测试电话」和带 `force` 的信号能拨。
+  切换失败或存不住时开关会弹回服务器真实状态并给红字提示，不会显示成一个骗人的「已关」。
 - **时间段有总开关**：右侧「时间段」面板里的开关关掉后，不再看星期与区间，任何时间都可拨打
   （通知总开关与「防轰炸」仍然生效）。配置面板按「操作 / 时间段 / 防轰炸 / 电话接口 / 备用通道 / 令牌」分页，
   改动会在底部保存栏显示「有未保存的改动」，随时可 `Ctrl+S` 保存。
@@ -251,6 +254,7 @@ Workers & Pages → Pages → 连接到 Git → 框架预设 **None**、构建�
 | POST | `/api/probe` | 是 | 通道自检（对电话通道只做「不拨号」的可达性验证） |
 | GET | `/api/balance` | 是 | **资源查询**：剩余语音分钟数 / 余额 / 短信 / 邮件（需开发者 Token） |
 | GET | `/api/status?requestId=` | 是 | 按 `requestId` 查这条通知在各通道的实际发送结果（需开发者 Token） |
+| GET/POST | `/api/switch` | 是 | **总开关**：`GET` 读状态；`POST {on:true|false}` 直接设定、`{toggle:true}` 取反。也可用别名 `{enabled:false}` / `{value:false}`。一次只改 `enabled`，**不会顺带覆盖整份配置** |
 | GET/POST | `/api/config` | 是 | 读/改配置（App Key 与开发者 Token 回传掩码，填回掩码不会清空真值） |
 | POST | `/api/auth/token` | 视情况 | 设置站点令牌 |
 | GET | `/api/auth/check` | 否 | 当前令牌是否有效 |
@@ -268,6 +272,16 @@ Workers & Pages → Pages → 连接到 Git → 框架预设 **None**、构建�
 
 被时间段/去重/配额拦下时 `ok:false, skipped:true`，`reason` 取
 `outside_window` / `duplicate` / `rate_limited` / `hourly_quota` / `daily_quota` / `disabled` / `unknown_channel` / `invalid_signal`。
+
+**总开关**（`enabled`）与其它限制的区别：它是唯一的「一键熔断」——关掉之后除 `force` 信号外一律不拨号
+（`reason: "disabled"`），测试电话走的就是 `force`，所以关着也能自测。切换动作会写进日志表（谁在什么时候关的，查得到）。
+界面上有两个入口：页面**顶栏**那个开关点一下立刻生效（走 `/api/switch`，一次请求只改这一个字段）；「操作」面板里的同名开关属于整份配置，要跟着「保存配置」一起提交。
+命令行也能切：
+
+```bash
+curl -X POST https://你的域名/api/switch -H "X-Auth-Token: 你的令牌" \
+     -H "Content-Type: application/json" -d '{"on":false}'   # 立刻停掉全部自动电话通知
+```
 
 **防轰炸默认值按 Spug 语音通道自身的限流设定**（改大就会撞平台流控，那通电话不会响、还会静默返回成功）：
 

@@ -605,6 +605,90 @@ async function testWindowSwitchAndPersistence() {
   await setConfig({ enabled: true, window: { enabled: true, mode: "inside", tz, days: [0, 1, 2, 3, 4, 5, 6], ranges: [["00:00", "23:59"]] }, guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50, maxPerDay: 500 } });
 }
 
+/* ---------------- [8] 总开关 ---------------- */
+async function testMasterSwitch() {
+  console.log("\n[8] 总开关接口（一键开/关，只动 enabled）");
+  mock.reset();
+  await resetQuota();
+  await setConfig({
+    enabled: true,
+    window: { enabled: true, mode: "inside", tz: "Asia/Shanghai", days: [0, 1, 2, 3, 4, 5, 6], ranges: [["00:00", "23:59"]] },
+    guard: { dedupeSeconds: 0, minIntervalSeconds: 0, maxPerHour: 50, maxPerDay: 500 },
+    phone: { channel: "voice", targets: "", retry: 0, timeoutMs: 15000, titlePrefix: "[监听器]", contentLimit: 120 }
+  });
+
+  // 8.1 读状态
+  const st = await call("/api/switch", { method: "GET" });
+  eq(st.data.ok, true, "GET /api/switch 可用");
+  eq(st.data.enabled, true, "默认开着");
+
+  // 8.2 关掉：只改 enabled，其它字段一个都不许动
+  const off = await call("/api/switch", { method: "POST", body: { on: false } });
+  eq(off.data.ok, true, "POST on:false 成功");
+  eq(off.data.enabled, false, "返回新状态：已关闭");
+  eq(off.data.changed, true, "changed=true");
+  eq(off.data.persisted, true, "写进存储并回读校验通过");
+  eq(off.data.durable, true, "KV 上是持久化的");
+
+  const afterOff = await call("/api/config");
+  eq(afterOff.data.config.enabled, false, "独立 GET 读回来确实是关闭状态");
+  eq(afterOff.data.config.phone.contentLimit, 120, "顺手确认没把整份配置冲掉（contentLimit 还在）");
+  eq(afterOff.data.config.guard.maxPerDay, 500, "防轰炸设置也没被动过");
+
+  const hOff = await call("/api/health");
+  eq(hOff.data.enabled, false, "/api/health 也反映关闭状态（界面顶栏据此回填）");
+
+  // 8.3 关掉时信号被拒（force 才穿透）
+  const sig = await call("/api/signal", { method: "POST", body: { title: "总开关关闭时的信号", content: "不该拨号", source: "test" } });
+  eq(sig.data.skipped, true, "总开关关闭 → 信号被跳过而不是拨号");
+  eq(sig.data.reason, "disabled", "reason = disabled");
+  eq(mock.phoneCalls.length, 0, "确实一通都没拨");
+  const forced = await call("/api/signal", { method: "POST", body: { title: "强制信号", content: "force 穿透", force: true } });
+  ok(forced.data.ok, "force 信号仍然穿透（测试电话走的就是 force）");
+  eq(mock.phoneCalls.length, 1, "force 那一通拨出去了");
+
+  // 8.4 toggle 取反 + enabled/value 两种别名
+  const t1 = await call("/api/switch", { method: "POST", body: { toggle: true } });
+  eq(t1.data.enabled, true, "toggle 从关闭 → 开启");
+  eq(t1.data.changed, true, "changed=true");
+  const t2 = await call("/api/switch", { method: "POST", body: { enabled: false } });
+  eq(t2.data.enabled, false, "别名 enabled:false 也认");
+  const t3 = await call("/api/switch", { method: "POST", body: { on: false } });
+  eq(t3.data.changed, false, "重复同一个值 → changed=false（界面提示「状态没变」）");
+
+  // 8.5 参数缺失要报清楚，而不是静默当 false
+  const bad = await call("/api/switch", { method: "POST", body: {} });
+  eq(bad.status, 400, "空 body → 400");
+  eq(bad.data.error, "bad_param", "error=bad_param");
+  eq((await call("/api/switch", { method: "GET" })).data.enabled, false, "参数错误不会改状态");
+
+  // 8.6 没令牌就切不动
+  const noTok = await call("/api/switch", { method: "POST", body: { on: true }, token: "" });
+  eq(noTok.status, 401, "不带令牌 → 401");
+  eq((await call("/api/switch", { method: "GET" })).data.enabled, false, "401 时状态原封不动");
+
+  // 8.7 总开关也要记录到日志（谁什么时候关的，得查得到）
+  const logs = await call("/api/logs?limit=20");
+  const hit = (logs.data.items || []).find((x) => String(x.title).includes("总开关"));
+  ok(hit, "切换动作进了日志表");
+  ok(!hit.ok, "关闭那次的日志记成非成功状态");
+  ok(String(hit.detail).includes("force"), "日志里写清楚关闭后只有 force 能穿透");
+
+  // 8.8 没有可持久化存储时不许假装切成功
+  const envNoStore = { SPUG_APP_KEY: "ak_test_key", SIGNAL_TOKEN: TOKEN };
+  const wd = await handleApi(makeRequest("/api/switch", { method: "POST", body: { on: false }, token: TOKEN, hostname: "demo.workers.dev" }), envNoStore);
+  const wdData = await wd.json();
+  eq(wdData.ok, false, "workers.dev 无 KV → 不假装成功");
+  eq(wdData.error, "not_persisted", "error=not_persisted");
+  eq(wdData.changed, false, "changed=false");
+  ok(String(wdData.detail).includes("NOTIFY_KV"), "detail 里写了要绑的变量名");
+
+  // 收尾
+  await setConfig({ enabled: true });
+  mock.reset();
+  await resetQuota();
+}
+
 async function main() {
   installFetchMock();
   console.log("=== phone-notify 端到端测试（无网络、不真实拨号）===");
@@ -615,6 +699,7 @@ async function main() {
   await testHealthAndLogs();
   await testModuleBoundary();
   await testWindowSwitchAndPersistence();
+  await testMasterSwitch();
 
   console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
   if (fail) {

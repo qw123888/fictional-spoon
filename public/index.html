@@ -14,6 +14,14 @@
     <span class="sub">phone-notify</span>
   </div>
   <div class="topbar-right">
+    <div class="master off" id="master-wrap" title="一键开关：点一下就生效，不用点「保存配置」">
+      <span class="master-title">电话通知</span>
+      <label class="switch">
+        <input type="checkbox" id="master-enabled">
+        <span class="slider"></span>
+      </label>
+      <span class="master-state" id="master-state">读取中…</span>
+    </div>
     <span class="pill" id="clock">--:--:--</span>
     <span class="pill" id="win-pill">时间段：读取中</span>
     <span class="pill" id="quota-pill">本小时 --/--</span>
@@ -105,7 +113,7 @@
           <span class="slider"></span>
           <span class="switch-text">允许自动电话通知</span>
         </label>
-        <div class="hint">关闭后只响应 <code>force</code> 信号与「测试电话」。改完记得点下面的「保存配置」。</div>
+        <div class="hint">关闭后只响应 <code>force</code> 信号与「测试电话」。改完记得点下面的「保存配置」；只想立刻切一下就用页面顶部那个「电话通知」开关（点一下即生效）。</div>
       </div>
     </section>
 

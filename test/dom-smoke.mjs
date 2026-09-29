@@ -61,7 +61,9 @@ const DEFAULT_CONFIG = {
 
 let saveMode = "kv"; // kv | not_persisted
 let authMode = "open"; // open | token（token = 站点设了 SIGNAL_TOKEN，必须带 X-Auth-Token）
+let masterEnabled = true; // 服务器上的总开关状态（/api/switch 会改它）
 const posts = [];
+const switchCalls = [];
 const sentTokens = [];
 
 function storageInfo() {
@@ -99,11 +101,22 @@ async function fakeFetch(url, init = {}) {
     }
     return json({ ok: false, error: "not_persisted", detail: "配置没能写进存储（当前后端：内存）。请给 Worker 绑定一个 KV 命名空间。", storage: storageInfo(), config: DEFAULT_CONFIG });
   }
+  if (u.endsWith("/api/switch") && init.method === "POST") {
+    switchCalls.push(body);
+    if (saveMode === "not_persisted") {
+      return json({ ok: false, error: "not_persisted", detail: "总开关没能写进存储（当前后端：内存）。请给 Worker 绑定一个 KV 命名空间。", enabled: masterEnabled, changed: false, storage: storageInfo() });
+    }
+    const want = body.toggle ? !masterEnabled : Boolean(body.on ?? body.enabled);
+    const changed = want !== masterEnabled;
+    masterEnabled = want;
+    return json({ ok: true, enabled: masterEnabled, changed, persisted: true, durable: true, warning: "", storage: storageInfo() });
+  }
+  if (u.endsWith("/api/switch")) return json({ ok: true, enabled: masterEnabled, storage: storageInfo() });
   if (u.endsWith("/api/health")) {
     return json({
       ok: true,
       now: { iso: "2026-09-30 06:00", tz: "Asia/Shanghai", weekday: 3 },
-      enabled: true,
+      enabled: masterEnabled,
       window: { active: true, allowed: true, reason: "window_active", detail: "每天 00:00-23:59", enabled: true, disabled: false },
       guard: { usedThisHour: 0, maxPerHour: 5, usedToday: 0, maxPerDay: 20, minIntervalSeconds: 60, lastSendAt: null },
       phone: { configured: true, last: null },
@@ -244,7 +257,38 @@ eq($("auth-banner").classList.contains("hidden"), true, "带上令牌后红条�
 eq($("cfg-maxday").value, "20", "重新拉到的配置填进了表单（不再是空壳）");
 ok(sentTokens.includes("good-token"), "后续请求确实带上了 X-Auth-Token");
 
-console.log("\n[8] 用带 ?token= 的链接打开：自动授权，不弹提示");
+console.log("\n[8] 顶栏总开关：点一下就生效，不用点「保存配置」");
+masterEnabled = true;
+switchCalls.length = 0;
+posts.length = 0;
+$("btn-refresh").dispatchEvent(new window.Event("click", { bubbles: true }));
+for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 5));
+eq($("master-enabled").checked, true, "顶栏开关按服务器状态回填为开");
+ok($("master-state").textContent.includes("已开启"), `状态文字写明已开启：${$("master-state").textContent}`);
+eq($("master-wrap").classList.contains("on"), true, "开关容器进入 on 样式");
+
+$("master-enabled").checked = false;
+$("master-enabled").dispatchEvent(new window.Event("change", { bubbles: true }));
+for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 5));
+eq(switchCalls.length, 1, "点一下只发一个请求");
+eq(switchCalls[0].on, false, "请求体是 {on:false}（只切开关，不带整份配置）");
+eq(posts.length, 0, "没有顺手发一份 /api/config 保存（不会覆盖你还改了一半的表单）");
+eq(masterEnabled, false, "服务器上的开关真的关了");
+ok($("master-state").textContent.includes("已关闭"), `状态文字改为已关闭：${$("master-state").textContent}`);
+eq($("cfg-enabled").checked, false, "「操作」面板里那个同名开关也同步了");
+
+console.log("\n[9] 总开关切不动时不许骗人：开关弹回去 + 红条说明");
+saveMode = "not_persisted";
+masterEnabled = false;
+$("master-enabled").checked = true;
+$("master-enabled").dispatchEvent(new window.Event("change", { bubbles: true }));
+for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 5));
+eq($("master-enabled").checked, false, "服务器没存住 → 开关弹回真实状态（false）");
+ok($("master-state").textContent.includes("已关闭"), "状态文字也跟着回到已关闭");
+ok($("storage-banner").textContent.includes("KV") || $("storage-banner").textContent.includes("存储"), "顶部红条给出「绑 KV」的提示");
+saveMode = "kv";
+
+console.log("\n[10] 用带 ?token= 的链接打开：自动授权，不弹提示");
 ls.delete("pn_token");
 sentTokens.length = 0;
 globalThis.__pnTestHref = "https://site.example/?token=good-token";

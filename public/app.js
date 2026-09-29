@@ -19,6 +19,8 @@ const state = {
   savedFp: "",
   // 本浏览器没带令牌（后端返回 401）：界面上要一直挂着红条，别只弹一下就没了
   needToken: false,
+  // 总开关正在提交：这期间不接受健康轮询回填，避免界面"跳回去"
+  masterPending: false,
   tab: localStorage.getItem("pn_tab") || "ops"
 };
 
@@ -252,6 +254,8 @@ function renderHealth(h) {
     tag.textContent = winOff ? "限制已关闭" : win.active ? "当前：可拨打" : "当前：暂停";
     tag.className = `tag ${winOff || !win.active ? "" : "ok"}`;
   }
+  // 顶栏总开关跟随服务器真实状态（正在切换时不回填，免得开关自己跳回去）
+  if (!state.masterPending) renderMaster(Boolean(h.enabled));
   renderStorageBanner(h.storage);
 }
 
@@ -322,6 +326,7 @@ function fillConfig(cfg) {
   $("cfg-fallback-url").value = cfg.fallback.webhookUrl || "";
 
   applyWindowEnabledUI();
+  if (!state.masterPending) renderMaster(Boolean(cfg.enabled));
   // 以服务器回填后的表单为准记录指纹：此刻表单 = 已保存状态
   state.savedFp = JSON.stringify(collectConfig());
   setSaveState("saved");
@@ -582,6 +587,64 @@ async function doSave({ silent = false } = {}) {
   if (!silent) toast(`保存失败：${data.detail || data.error || "未知错误"}`, "bad");
 }
 
+/* ---------------- 总开关（顶栏一键开关）---------------- */
+/**
+ * 只负责画：把服务器/本地的状态画到顶栏那个开关上
+ * @param {boolean} enabled
+ * @param {{pending?:boolean}} [opts]
+ */
+function renderMaster(enabled, { pending = false } = {}) {
+  const box = $("master-wrap");
+  const cb = $("master-enabled");
+  const txt = $("master-state");
+  if (!box || !cb || !txt) return;
+  cb.checked = Boolean(enabled);
+  cb.disabled = Boolean(pending);
+  box.className = `master ${pending ? "pending" : enabled ? "on" : "off"}`;
+  txt.textContent = pending ? "切换中…" : enabled ? "已开启 · 按时间段拨打" : "已关闭 · 只放行测试电话";
+  // 操作面板里那个同名开关保持同步（它属于"整份配置"，要随保存一起提交）
+  const legacy = $("cfg-enabled");
+  if (legacy) legacy.checked = Boolean(enabled);
+}
+
+/**
+ * 总开关的动作：一次请求只改 enabled，立刻生效，不需要点「保存配置」
+ * @param {boolean} on
+ */
+async function setMaster(on) {
+  if (state.masterPending) return;
+  state.masterPending = true;
+  renderMaster(on, { pending: true });
+  const { data, status } = await api("/api/switch", { method: "POST", body: { on }, quiet: true });
+  state.masterPending = false;
+
+  if (data && data.ok) {
+    renderMaster(data.enabled);
+    if (state.health) state.health.enabled = data.enabled;
+    markDirty(); // 表单里的 enabled 也是新值，别让它显示成"未保存"
+    if (data.durable === false) {
+      renderStorageBanner(data.storage || state.health?.storage);
+      toast(`电话通知已${data.enabled ? "开启" : "关闭"}；但只是临时存储（没绑 KV）`, "bad");
+    } else {
+      toast(data.changed ? `电话通知已${data.enabled ? "开启" : "关闭"}` : "状态没变", data.enabled ? "ok" : "warn");
+    }
+    refreshHealth();
+    refreshLogs();
+    return;
+  }
+  // 失败：界面必须回到服务器的真实状态，不能让开关骗人
+  const real = state.health && typeof state.health.enabled === "boolean" ? state.health.enabled : !on;
+  renderMaster(real);
+  if (data && data.error === "not_persisted") {
+    renderStorageBanner(data.storage || state.health?.storage);
+    toast(data.detail || "总开关没能写进存储，请先给 Worker 绑定 KV", "bad");
+  } else if (status === 401) {
+    toast("令牌无效：切换开关需要令牌（把 SIGNAL_TOKEN 粘进顶部红条）", "bad");
+  } else {
+    toast(`切换失败：${(data && (data.detail || data.error)) || `HTTP ${status || "?"}`}`, "bad");
+  }
+}
+
 /* ---------------- 时钟 ---------------- */
 function tickClock() {
   const now = new Date();
@@ -622,6 +685,9 @@ function bind() {
     $("token-input").focus();
   });
   $("cfg-add-range").addEventListener("click", () => addRangeRow());
+
+  // 顶栏总开关：点一下立刻生效（不用点「保存配置」）
+  $("master-enabled").addEventListener("change", () => setMaster($("master-enabled").checked));
 
   // 面板切换：点标签页只换显示，不再把所有配置挤在一个长条里
   document.querySelectorAll("#cfg-tabs .tab").forEach((tab) => {
