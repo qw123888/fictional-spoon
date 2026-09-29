@@ -177,10 +177,11 @@ blobs → tree → commit → 更新分支 的方式推上去，同样会做密�
 
 1. Cloudflare 控制台 → **Workers & Pages** → 创建 → Workers → **连接到 Git** → 选 `fictional-spoon`，分支 `main`
 2. 构建命令留空，部署命令 `npx wrangler deploy`（仓库根有 `wrangler.toml`，CF 会自动识别）
-   仓库里的 `[[kv_namespaces]]` 默认是**注释掉的**，所以第一次就能部署成功（状态存内存）。
-   建议随后建 KV：**KV** → Create namespace（名字随意，如 `phone-notify-kv`）→ 复制 **ID**
+   仓库里的 `[[kv_namespaces]]` 默认是**注释掉的**，所以第一次就能部署成功。
+   **但配置要想存住，必须补上 KV**（`*.workers.dev` 上 Cache API 不生效，不绑 KV 就存不住）：
+   控制台 **Storage & Databases → KV → Create namespace**（名字随意，如 `phone-notify-kv`）→ 复制 **ID**
    → 填进 `wrangler.toml` 并去掉那三行的 `#`，再 push 一次
-   （不想改文件就在 Worker → Settings → Bindings 里加 KV 绑定，变量名填 `NOTIFY_KV`，代码两种绑定名都认）
+   （不想改文件就在 Worker → Settings → Bindings → Add → KV namespace，变量名填 `NOTIFY_KV`，**改完立即生效，不用重新部署**；代码两种绑定名都认）
 3. Worker → **Settings → Variables and Secrets** 加三项，类型选 **Secret**：
    `SPUG_APP_KEY`、`SPUG_DEV_TOKEN`、`SIGNAL_TOKEN`（`SIGNAL_TOKEN` 自己定，电脑端用同一个）
 4. 部署完拿到 `https://phone-notify.<你的子域>.workers.dev`
@@ -213,9 +214,17 @@ Workers & Pages → Pages → 连接到 Git → 框架预设 **None**、构建�
 
 补充：
 
-- **不绑定 KV 也能存住配置**：代码按 `KV → 边缘缓存(Cache API) → 内存` 三级自动降级。没绑 KV 时用边缘缓存，
-  刷新页面配置还在（控制台顶部胶囊显示「存储：缓存」）。绑定 KV 才是跨机房一致的强持久化（显示「存储：KV」）。
-  三级都不可用时，点「保存配置」会**明确报错**「没存住」，不会再假装保存成功。
+- **配置想存住，必须绑 KV**（三级降级：`KV → 边缘缓存(Cache API) → 内存`）。
+  Cloudflare 文档明确写了 **Cache API 在 `*.workers.dev` 上不生效**（自定义域名 / Pages 才生效），
+  所以跑在 `xxx.workers.dev` 又没绑 KV 时，后端会如实报告成「内存（临时）」，
+  点「保存配置」返回 `ok:false / not_persisted`，控制台顶部弹红条告诉你绑 KV 的三步，
+  而不是假装保存成功。绑 KV 不需要改代码、不需要重新部署：
+  ① **Storage & Databases → KV → Create namespace**（名字随意，如 `phone-notify-kv`）；
+  ② 本 Worker → **Settings → Bindings → Add → KV namespace**，Variable name 填 `NOTIFY_KV`，选刚建的空间；
+  ③ 回控制台再点一次「保存配置」。
+- **浏览器草稿兜底**：每次点保存都会把配置存一份到本浏览器 `localStorage`。服务器端存不住时，
+  刷新页面会用这份草稿回填表单（顶部红条标注「本浏览器草稿」）并自动重发一次，
+  所以不会再出现"刷新就得重新填"。真要生效到服务器，还是得绑 KV。
 - **时间段有总开关**：右侧「时间段」面板里的开关关掉后，不再看星期与区间，任何时间都可拨打
   （通知总开关与「防轰炸」仍然生效）。配置面板按「操作 / 时间段 / 防轰炸 / 电话接口 / 备用通道 / 令牌」分页，
   改动会在底部保存栏显示「有未保存的改动」，随时可 `Ctrl+S` 保存。
@@ -301,8 +310,8 @@ comm.register(new SmsAdapter(cfg));   // 非 ChannelAdapter 实例会被拒绝
 | 电话不响、`code` 提示手机号未授权 | Spug 要求机主先完成「防骚扰授权」（扫码后发短信确认），否则语音通道对该号码不可用。 |
 | `code` 提示渠道未开启 / App Key 未授权 | 在 Spug 控制台开启 voice 通道，并确认 App Key 的权限范围包含语音。 |
 | 被手机系统拦截 | Spug 语音主叫号：`021 31443892`、`021 32199761`、`0371 55969643`，可加白名单或关拦截。 |
-| 网页显示「内存（临时 / 边缘缓存）」 | 没有绑定 KV（`wrangler.toml` 里 `id` 为空）。现在会自动降级到**边缘缓存**（刷新后配置还在），绑定 KV 才是跨机房强持久化。 |
-| **点「保存配置」没反应 / 刷新页面配置又变回默认** | 老版本因为后端是内存存储、且接口无条件返回 `ok:true`（假装保存成功）。现已修复：点保存会有明确反馈（`已保存 HH:MM:SS` / `没存住：存储不可用` + 顶部红条），并且没绑 KV 时自动用边缘缓存兜底。若仍报 `not_persisted`，说明 KV 与缓存都不可用，照红条提示绑定 KV。 |
+| 网页显示「内存（临时）」/ 顶部红色「配置存不住」 | 没有绑定 KV。跑在 `*.workers.dev` 时 Cache API 不生效（Cloudflare 文档有明确说明），所以只有内存可用 —— 保存会返回 `not_persisted`。按红条三步绑 KV 即可，不用改代码、不用重新部署。 |
+| **点「保存配置」没反应 / 刷新页面配置又变回默认** | 老版本后端是内存存储、且接口无条件返回 `ok:true`（假装保存成功）。现已修复：点保存有明确反馈（`已保存 HH:MM:SS` / `没存住：…` + 顶部红条 + 按钮状态），没绑 KV 时还会用**本浏览器草稿**回填（刷新不用重填）。要真正生效到服务器，绑 KV（见上）。 |
 | 网页 401 | 浏览器「访问令牌」里的值与环境变量 `SIGNAL_TOKEN` 不一致（环境变量优先）。 |
 | 剩余语音显示「查询失败 / 未配置开发者 Token」 | 查余额和发送状态**只能**用 Spug 控制台的「开发者 Token」（App Key 不行）：填到控制台「电话接口参数 → 开发者Token」，或 `wrangler secret put SPUG_DEV_TOKEN`。 |
 | 剩余语音 0 分钟 | 语音是计费通道，去 Spug 控制台充值或买语音资源包；控制台会在 ≤3 分钟时弹红色提醒。 |

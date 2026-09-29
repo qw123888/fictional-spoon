@@ -186,6 +186,19 @@ eq($("storage-banner").classList.contains("bad"), true, "顶部弹出红色存�
 ok($("storage-banner").textContent.includes("NOTIFY_KV"), "告警条里写了绑 KV 的办法");
 ok(document.body.textContent.includes("没存住") || document.body.textContent.includes("存储"), "页面上能看到失败原因");
 
+console.log("\n[5] 服务器存不住时，用本浏览器草稿顶上（刷新不用重填）");
+saveMode = "memory";
+ls.set(
+  "pn_cfg",
+  JSON.stringify({ t: Date.now(), cfg: { ...DEFAULT_CONFIG, guard: { ...DEFAULT_CONFIG.guard, maxPerDay: 9 } } })
+);
+posts.length = 0;
+$("btn-token-apply").dispatchEvent(new window.Event("click", { bubbles: true })); // 会触发一次 refreshConfig()
+for (let i = 0; i < 60; i++) await new Promise((r) => setTimeout(r, 5));
+eq($("cfg-maxday").value, "9", "表单显示的是本浏览器草稿里的 9，而不是服务器默认的 20");
+ok($("storage-banner").textContent.includes("草稿"), "告警条说明当前是本浏览器草稿（未生效到服务器）");
+ok(posts.length >= 1, "草稿会自动重发一次给服务器（当前实例先按草稿跑）");
+
 console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
 if (fail) {
   console.log("失败项：" + failures.join(" / "));

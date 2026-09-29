@@ -19,8 +19,8 @@ const CORS = {
   "Access-Control-Max-Age": "86400"
 };
 
-export function createApp(env = {}) {
-  const store = createStore(env);
+export function createApp(env = {}, runtime = {}) {
+  const store = createStore(env, runtime);
   const log = new EventLog(store);
   const comm = new CommModule({ store, log, env });
   return { store, log, comm };
@@ -50,13 +50,23 @@ function maskConfig(cfg) {
 
 /** 存储后端信息，前端据此提示"配置存不存得住" */
 function storageInfo(store) {
+  const backend = store.backend;
   return {
     persistent: store.persistent,
-    backend: store.backend,
+    backend,
     label: store.backendLabel,
-    durable: store.backend === "cloudflare-kv"
+    durable: backend === "cloudflare-kv",
+    cacheUnusable: Boolean(store.cacheUnusable),
+    hint: store.backendHint
   };
 }
+
+/** 绑 KV 的三步走，出给界面直接照抄 */
+const KV_STEPS =
+  "在 Cloudflare 控制台绑一个 KV 就能存住（30 秒，不用改代码、不用重新部署）：" +
+  "① Storage & Databases → KV → Create namespace（名字随意，例如 notify-kv）；" +
+  "② 回到这个 Worker → Settings → Bindings → Add → KV namespace，Variable name 填 NOTIFY_KV，选刚建的命名空间；" +
+  "③ 保存后再点一次「保存配置」。";
 
 async function readJson(request) {
   try {
@@ -72,7 +82,7 @@ export async function handleApi(request, env = {}) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, "") || "/api";
   const method = request.method.toUpperCase();
-  const { store, log, comm } = createApp(env);
+  const { store, log, comm } = createApp(env, { hostname: url.hostname });
 
   if (method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
@@ -175,11 +185,11 @@ export async function handleApi(request, env = {}) {
       // 写后校验：读回来比对。存不住就如实说"没保存成功"，别让界面显示一个骗人的"已保存"
       const persisted = await store.verify(CONFIG_KEY, next);
       const info = storageInfo(store);
-      if (!persisted) {
+      if (!persisted || info.backend === "memory") {
         return json({
           ok: false,
           error: "not_persisted",
-          detail: `配置没能写进存储（当前后端：${info.label}）。请给 Worker 绑定一个 KV 命名空间（wrangler.toml 的 [[kv_namespaces]] 或控制台 Bindings → KV，变量名 NOTIFY_KV），再保存一次。`,
+          detail: `配置没能写进存储（当前后端：${info.label}）。${KV_STEPS}`,
           storage: info,
           config: maskConfig(stored)
         });
@@ -187,6 +197,8 @@ export async function handleApi(request, env = {}) {
       return json({
         ok: true,
         persisted: true,
+        durable: info.durable,
+        warning: info.durable ? "" : info.hint,
         config: maskConfig(next),
         windowText: describeWindow(next),
         hasAppKey: Boolean(next.spug.appKey),

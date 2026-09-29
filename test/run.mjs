@@ -95,11 +95,11 @@ function installFetchMock() {
   };
 }
 
-function makeRequest(path, { method = "GET", body, token } = {}) {
+function makeRequest(path, { method = "GET", body, token, hostname = "site.local" } = {}) {
   const headers = {};
   if (body !== undefined) headers["content-type"] = "application/json";
   if (token) headers["x-auth-token"] = token;
-  return new Request(`https://site.local${path}`, {
+  return new Request(`https://${hostname}${path}`, {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body)
@@ -568,15 +568,31 @@ async function testWindowSwitchAndPersistence() {
     const reread = await callWith(envNoStore, "/api/config");
     ok(reread.data.config.guard.maxPerDay !== 99, "内存后端确实读不回新值（复现用户看到的“刷新就重填”）");
 
-    // 7.6 边缘缓存兜底：不绑 KV 也能存住
+    // 7.6 边缘缓存兜底：不绑 KV 也能存住（只在自定义域名 / Pages 上真有效）
     globalThis.caches = fakeCaches();
     const ec = await callWith(envNoStore, "/api/config", { method: "POST", body: { guard: { maxPerDay: 42 } } });
     eq(ec.data.ok, true, "边缘缓存模式下保存成功");
     eq(ec.data.persisted, true, "persisted=true（真的读回来了）");
     eq(ec.data.storage.backend, "edge-cache", "storage.backend = edge-cache");
+    eq(ec.data.durable, false, "durable=false：如实说明不是真持久");
+    ok(String(ec.data.warning).includes("KV"), "非持久后端给一句“建议绑 KV”的提醒");
     const ecRead = await callWith(envNoStore, "/api/config");
     eq(ecRead.data.config.guard.maxPerDay, 42, "下一次请求（新 isolate/新 store）仍能读到 42");
     ok(String(ec.data.storage.label).includes("缓存"), "标签说明用的是边缘缓存");
+
+    // 7.7 *.workers.dev 上 Cache API 不生效（Cloudflare 文档明确写了），
+    //     所以不能假装有缓存兜底，必须判成内存 + 如实提示
+    const wd = await callWith(envNoStore, "/api/config", {
+      method: "POST",
+      body: { guard: { maxPerDay: 55 } },
+      hostname: "demo.workers.dev"
+    });
+    eq(wd.data.ok, false, "workers.dev 上没有 KV 时保存不假装成功");
+    eq(wd.data.error, "not_persisted", "error = not_persisted");
+    eq(wd.data.storage.backend, "memory", "workers.dev → backend=memory（不吹 edge-cache）");
+    eq(wd.data.storage.cacheUnusable, true, "storage.cacheUnusable=true");
+    ok(String(wd.data.storage.label).includes("workers.dev"), "标签直说 Cache API 在 workers.dev 不生效");
+    ok(String(wd.data.detail).includes("NOTIFY_KV"), "detail 里写了要绑的变量名");
   } finally {
     if (savedCaches === undefined) delete globalThis.caches;
     else globalThis.caches = savedCaches;

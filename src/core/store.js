@@ -5,9 +5,10 @@
  *
  * 三级后端，按可用性自动挑一个（保存配置后能不能读回来，全看这里）：
  *  1. Cloudflare KV（env.NOTIFY_KV）—— 真持久化，跨机房一致；
- *  2. 边缘缓存 Cache API（caches.default）—— **不需要建任何绑定**，
- *     同一机房内共享、能活过 isolate 回收，配置/日志不会"保存完就消失"；
- *     缺点是同一时刻不同机房各有一份副本（就近写就近读，日常够用）；
+ *  2. 边缘缓存 Cache API（caches.default）—— 不需要建任何绑定，
+ *     但**只在自定义域名 / Pages（*.pages.dev）上真的能用**；
+ *     Cloudflare 文档明确写了 workers.dev 上 Cache API 不生效，
+ *     所以跑在 *.workers.dev 时这里会直接判成不可用（不然就是自欺欺人）；
  *  3. 进程内存 —— 本地开发（node local/server.mjs）或上面两者都不可用时兜底。
  *
  * 无论哪种后端，都额外维护一份内存热缓存，规避 KV 最终一致带来的"刚写完读不到"。
@@ -15,9 +16,11 @@
  * 将来要换成 D1 / Durable Object / Redis，只改这个文件，上层零改动。
  */
 export class Store {
-  constructor(kv = null, cache = null) {
+  constructor(kv = null, cache = null, opts = {}) {
     this.kv = kv;
     this.cache = cache;
+    /** 跑在 *.workers.dev 这类 Cache API 不生效的地方时置 true（用来如实提示用户） */
+    this.cacheUnusable = Boolean(opts.cacheUnusable);
     this.mem = new Map();
   }
 
@@ -29,15 +32,28 @@ export class Store {
   /** 实际用的后端名，会出现在 /api/health 里 */
   get backend() {
     if (this.kv) return "cloudflare-kv";
-    if (this.cache) return "edge-cache";
+    if (this.cache && !this.cacheUnusable) return "edge-cache";
     return "memory";
   }
 
   /** 给界面用的一句人话 */
   get backendLabel() {
     if (this.kv) return "KV 持久化";
-    if (this.cache) return "边缘缓存（近似持久）";
+    if (this.cache && !this.cacheUnusable) return "边缘缓存（同机房有效）";
+    if (this.cacheUnusable) return "内存（临时；*.workers.dev 上 Cache API 不生效）";
     return "内存（临时，重启/换机房会丢）";
+  }
+
+  /** 存不住配置时，给用户一句"怎么办" */
+  get backendHint() {
+    if (this.kv) return "";
+    if (this.cache && !this.cacheUnusable) {
+      return "配置写在边缘缓存里：同一个机房能读到，跨机房或缓存被清会退回默认值。建议绑 KV 彻底解决。";
+    }
+    if (this.cacheUnusable) {
+      return "当前是 *.workers.dev 域名：Cache API 在这里不生效，所以配置只能临时放在内存里。绑一个 KV 命名空间就能存住（控制台 30 秒搞定，不用改代码、不用重新部署）。";
+    }
+    return "当前只有进程内存可用，配置存不住。请给 Worker 绑定 KV 命名空间（变量名 NOTIFY_KV）。";
   }
 
   /** 缓存 URL 用的假域名（只在本模块内部使用，不会真的出网） */
@@ -139,12 +155,20 @@ export class Store {
 
 /**
  * @param {object} env      Worker 的 env（含 NOTIFY_KV / KV 绑定）
- * @param {object} runtime  可注入的运行时（测试用）：{ caches }
+ * @param {object} runtime  可注入的运行时：{ caches, hostname }
+ *   hostname 用来判断是不是 *.workers.dev —— Cloudflare 文档写明 workers.dev
+ *   上 Cache API 不生效（自定义域名 / Pages 才生效），所以那种情况别假装有缓存兜底。
  */
 export function createStore(env = {}, runtime = {}) {
   // 兼容两种绑定名：wrangler.toml 里的 NOTIFY_KV，或控制台模板默认的 KV
   const kv = env.NOTIFY_KV || env.KV || null;
+  const host = String(runtime.hostname || "");
+  const onWorkersDev = /\.workers\.dev$/i.test(host);
+  const cacheUnusable = !kv && onWorkersDev;
+
   let cache = runtime.caches && runtime.caches.default ? runtime.caches.default : null;
   if (!cache && typeof caches !== "undefined" && caches && caches.default) cache = caches.default;
-  return new Store(kv, kv ? null : cache); // 有 KV 就不必再走缓存
+  if (kv || cacheUnusable) cache = null; // 有 KV 不必走缓存；workers.dev 上缓存本来就不生效
+
+  return new Store(kv, cache, { cacheUnusable });
 }

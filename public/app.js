@@ -4,6 +4,8 @@
    ============================================================ */
 const $ = (id) => document.getElementById(id);
 const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+/** 配置在本浏览器的草稿箱：服务器存不住时，至少刷新页面不用重新填 */
+const LS_CFG = "pn_cfg";
 
 const state = {
   config: null,
@@ -61,6 +63,26 @@ function fmtTime(iso) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+/* ---------------- 本浏览器草稿（localStorage） ---------------- */
+function rememberDraft(cfg) {
+  try {
+    localStorage.setItem(LS_CFG, JSON.stringify({ t: Date.now(), cfg }));
+  } catch {
+    /* 隐私模式之类写不进去就算了 */
+  }
+}
+
+function readDraft() {
+  try {
+    const raw = localStorage.getItem(LS_CFG);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    return obj && obj.cfg ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
 /* ---------------- 状态渲染 ---------------- */
 function card(key, value, detail = "", cls = "", valueCls = "") {
   return `<div class="card ${cls}">
@@ -75,21 +97,22 @@ function renderStorageBanner(storage) {
   const el = $("storage-banner");
   if (!el) return;
   const s = storage || {};
-  if (!s.backend) {
-    el.className = "banner hidden";
-    return;
-  }
-  if (s.backend === "cloudflare-kv") {
+  if (!s.backend || s.backend === "cloudflare-kv") {
     el.className = "banner hidden";
     el.textContent = "";
     return;
   }
+  const draft = readDraft();
+  const draftNote = draft
+    ? `<br>本浏览器存了草稿（${fmtTime(new Date(draft.t).toISOString())}），刷新不会丢；但它只是"待同步"，服务器没存住就不算生效。`
+    : "";
   el.className = `banner ${s.backend === "memory" ? "bad" : "warn"}`;
   el.innerHTML =
-    s.backend === "memory"
-      ? `<b>配置存不住：</b>当前用的是内存存储，保存后换个实例就没了（这正是"点保存没反应、刷新要重填"的原因）。` +
-        `给 Worker 绑定 KV 就好了：wrangler.toml 的 <code>[[kv_namespaces]]</code> 填上 id，或控制台 Settings → Bindings 加 KV 变量 <code>NOTIFY_KV</code>。`
-      : `<b>存储：边缘缓存兜底。</b>配置能存住（不需要绑 KV），但不同机房可能读到稍旧的副本。想彻底稳就绑 KV。`;
+    `<b>配置存不住：</b>${s.hint || "当前存储后端是临时的。"}` +
+    `<br>绑 KV 三步：① 控制台 <b>Storage &amp; Databases → KV → Create namespace</b>（名字随意）；` +
+    `② 本 Worker 的 <b>Settings → Bindings → Add → KV namespace</b>，变量名填 <code>NOTIFY_KV</code>；` +
+    `③ 回来再点一次「保存配置」。不用改代码、不用重新部署。` +
+    draftNote;
 }
 
 function renderHealth(h) {
@@ -339,9 +362,18 @@ async function refreshLogs() {
 
 async function refreshConfig() {
   const { data } = await api("/api/config");
-  if (data && data.ok) {
-    fillConfig(data.config);
-  }
+  if (!data || !data.ok) return;
+  fillConfig(data.config);
+
+  // 服务器存不住（没绑 KV）时，用本浏览器草稿顶上：
+  // 界面不至于一刷新就回到默认值，并把草稿自动重发一次（当前实例先按草稿跑）。
+  const storage = data.storage || {};
+  if (storage.durable) return;
+  const draft = readDraft();
+  if (!draft) return;
+  fillConfig(draft.cfg);
+  setSaveState("dirty", `已用本浏览器草稿回填（${fmtTime(new Date(draft.t).toISOString())}）`);
+  await doSave({ silent: true });
 }
 
 /* ---------------- 操作 ---------------- */
@@ -411,41 +443,47 @@ async function doSendSignal() {  const body = {
   refreshLogs();
 }
 
-async function doSave() {
+async function doSave({ silent = false } = {}) {
   const btn = $("btn-save");
   const body = collectConfig();
+  rememberDraft(body); // 先存本浏览器草稿：服务器存不住时也不至于白填
   btn.disabled = true;
   setSaveState("saving");
-  const { data, status } = await api("/api/config", { method: "POST", body });
+  const { data, status } = await api("/api/config", { method: "POST", body, quiet: silent });
   btn.disabled = false;
 
   if (!data) {
     setSaveState("failed", `保存失败（HTTP ${status || "?"}）`);
-    toast(`保存失败：站点没返回数据（HTTP ${status || "?"}）`, "bad");
+    if (!silent) toast(`保存失败：站点没返回数据（HTTP ${status || "?"}）`, "bad");
     return;
   }
   if (data.ok && data.persisted) {
     // 用服务器真实存下来的配置回填，避免"界面显示的值"和"实际生效的值"不一致
     if (data.config) fillConfig(data.config);
-    else {
-      state.savedFp = JSON.stringify(collectConfig());
-      setSaveState("saved");
-    }
+    else state.savedFp = JSON.stringify(collectConfig());
     const t = new Date().toLocaleTimeString("zh-CN", { hour12: false });
-    setSaveState("saved", `已保存 ${t}`);
-    toast("配置已保存（已写入存储）", "ok");
+    if (data.durable === false) {
+      setSaveState("dirty", `已生效，但只是临时存储（${t}）`);
+      renderStorageBanner(data.storage || state.health?.storage);
+      if (!silent) toast("已保存；但没绑 KV，配置随时可能退回默认值", "bad");
+    } else {
+      setSaveState("saved", `已保存 ${t}`);
+      if (!silent) toast("配置已保存（已写入存储）", "ok");
+    }
     refreshHealth();
     return;
   }
   if (data.error === "not_persisted") {
-    state.savedFp = ""; // 明确保持"未保存"
-    setSaveState("failed", "没存住：存储不可用");
+    // 明确保持"未保存"：界面不能显示一个骗人的"已保存"
+    state.savedFp = "";
+    state.dirtyFp = JSON.stringify(collectConfig());
+    setSaveState("failed", "没存住：服务器没有可持久化的存储");
     renderStorageBanner(data.storage || state.health?.storage);
-    toast(data.detail || "配置没能写进存储，请先给 Worker 绑定 KV", "bad");
+    if (!silent) toast(data.detail || "配置没能写进存储，请先给 Worker 绑定 KV", "bad");
     return;
   }
   setSaveState("failed", `保存失败：${data.detail || data.error || "未知错误"}`);
-  toast(`保存失败：${data.detail || data.error || "未知错误"}`, "bad");
+  if (!silent) toast(`保存失败：${data.detail || data.error || "未知错误"}`, "bad");
 }
 
 /* ---------------- 时钟 ---------------- */
