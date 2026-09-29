@@ -93,9 +93,7 @@ if ($who.data.login -ne ($Repo -split "/")[0]) {
 
 # 用 git/blobs 探针验写权限：只创建一个没人引用的 blob，不留提交、不留分支
 $probe = HttpJson "POST" "https://api.github.com/repos/$Repo/git/blobs" @{ content = "permcheck"; encoding = "utf-8" }
-if ($probe.code -eq 201) {
-  Say "  写权限：OK（Contents: Read and write）" "Green"
-} else {
+if ($probe.code -in @(401, 403, 404)) {
   Say "  写权限：被拒（HTTP $($probe.code)）" "Red"
   Say "  GitHub 说：$($probe.data)" "DarkGray"
   Say ""
@@ -108,6 +106,12 @@ if ($probe.code -eq 201) {
   Say ""
   Say "改完重新运行本脚本即可。想看新令牌行不行：.\push-github.bat -Check" "Yellow"
   exit 3
+}
+
+if ($probe.code -eq 201) {
+  Say "  写权限：OK（Contents: Read and write）" "Green"
+} else {
+  Say "  写权限：OK（HTTP $($probe.code) — 空仓库/git 校验提示，鉴权已通过）" "Green"
 }
 
 if ($Check) {
