@@ -166,11 +166,15 @@ if ($code -ne 0) {
 
 # ---------- 4. 收尾 ----------
 $plain = "https://github.com/$Repo.git"
-git remote remove origin 2>$null | Out-Null
-git remote add origin $plain
+$ErrorActionPreference = "Continue"   # git 往 stderr 写提示时别炸脚本
+git remote remove origin 2>&1 | Out-Null
+git remote add origin $plain 2>&1 | Out-Null
+$ErrorActionPreference = "Stop"
+$nowOrigin = (git remote get-url origin 2>&1 | Out-String).Trim()
+if ($nowOrigin -ne $plain) { git remote set-url origin $plain 2>&1 | Out-Null; $nowOrigin = $plain }
 Say ""
 Say "推送成功 ✅" "Green"
 Say "仓库地址：https://github.com/$Repo"
-Say "origin 已设为：$plain（不含令牌）"
+Say "origin = $nowOrigin（不含令牌）"
 Say ""
 Say "下一步：去 Cloudflare 用 Git 连接这个仓库部署，见 README「方式 B」。" "Cyan"
