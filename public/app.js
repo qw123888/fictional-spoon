@@ -17,6 +17,8 @@ const state = {
   timerBalance: null,
   // 已保存配置的指纹：用来判断"有没有未保存的改动"
   savedFp: "",
+  // 本浏览器没带令牌（后端返回 401）：界面上要一直挂着红条，别只弹一下就没了
+  needToken: false,
   tab: localStorage.getItem("pn_tab") || "ops"
 };
 
@@ -54,7 +56,69 @@ async function api(path, { method = "GET", body, quiet = false } = {}) {
     data = { ok: false, detail: `HTTP ${resp.status}` };
   }
   if (resp.status === 401 && !quiet) toast("令牌无效：请在上方「访问令牌」里填写正确令牌", "bad");
+  if (resp.status === 401) {
+    state.needToken = true;
+    renderAuthBanner();
+  } else if (data && data.ok && path !== "/api/health" && path !== "/api/ping") {
+    // 需要鉴权的接口成功了 → 说明浏览器里的令牌是对的
+    if (state.needToken) {
+      state.needToken = false;
+      renderAuthBanner();
+    }
+  }
   return { status: resp.status, data };
+}
+
+/* ---------------- 访问令牌 ---------------- */
+/**
+ * 支持用带令牌的链接一次性授权本浏览器：
+ *   https://xxx.workers.dev/?token=<SIGNAL_TOKEN>
+ * 用完会把地址栏里的 token 擦掉，避免留在历史记录/截图里。
+ */
+function applyTokenFromUrl() {
+  try {
+    // __pnTestHref 只是无浏览器测试的钩子，浏览器里永远是 undefined
+    const href = globalThis.__pnTestHref || window.location.href;
+    const u = new URL(href);
+    const t = (u.searchParams.get("token") || "").trim();
+    if (!t) return false;
+    state.token = t;
+    localStorage.setItem("pn_token", t);
+    state.needToken = false;
+    u.searchParams.delete("token");
+    const q = u.searchParams.toString();
+    if (window.history && history.replaceState) {
+      history.replaceState({}, "", u.pathname + (q ? `?${q}` : "") + (u.hash || ""));
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 站点设了 SIGNAL_TOKEN、而本浏览器没带令牌时，顶部挂一条常驻红条 */
+function renderAuthBanner() {
+  const el = $("auth-banner");
+  if (!el) return;
+  el.className = state.needToken ? "banner bad" : "banner bad hidden";
+}
+
+function applyBrowserToken(token) {
+  const t = String(token || "").trim();
+  if (!t) {
+    toast("令牌是空的，先把 SIGNAL_TOKEN 粘进来", "bad");
+    return;
+  }
+  state.token = t;
+  localStorage.setItem("pn_token", t);
+  state.needToken = false;
+  renderAuthBanner();
+  const inp = $("token-input");
+  if (inp) inp.value = t;
+  toast("令牌已存在本浏览器，正在重新读取配置…", "ok");
+  refreshConfig();
+  refreshHealth();
+  refreshLogs();
 }
 
 function fmtTime(iso) {
@@ -549,6 +613,14 @@ function bind() {
     await api("/api/logs/clear", { method: "POST" });
     refreshLogs();
   });
+  $("btn-auth-apply").addEventListener("click", () => applyBrowserToken($("auth-token-input").value));
+  $("auth-token-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") applyBrowserToken($("auth-token-input").value);
+  });
+  $("btn-auth-goto").addEventListener("click", () => {
+    switchTab("auth");
+    $("token-input").focus();
+  });
   $("cfg-add-range").addEventListener("click", () => addRangeRow());
 
   // 面板切换：点标签页只换显示，不再把所有配置挤在一个长条里
@@ -627,6 +699,7 @@ function bind() {
 }
 
 async function main() {
+  applyTokenFromUrl();
   bind();
   switchTab(state.tab, { save: false });
   tickClock();
@@ -634,8 +707,11 @@ async function main() {
 
   const check = await api("/api/auth/check", { quiet: true });
   if (check.data && check.data.open === false && !state.token) {
-    toast("站点已设置令牌，请先在右侧「访问令牌」里填入", "bad");
+    state.needToken = true;
+    renderAuthBanner();
+    toast("站点已设置令牌：把 SIGNAL_TOKEN 粘进顶部红条，或直接用带 ?token= 的链接打开", "bad");
   }
+  renderAuthBanner();
 
   await refreshConfig();
   await refreshHealth();

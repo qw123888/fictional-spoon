@@ -59,6 +59,18 @@
   <aside class="col-side">
     <div class="banner hidden" id="storage-banner"></div>
 
+    <div class="banner bad hidden" id="auth-banner">
+      <b>本浏览器还没带访问令牌（SIGNAL_TOKEN）。</b>
+      站点已经设了令牌，所以「保存配置 / 测试电话 / 查日志 / 查余额」都会被服务器拒掉（返回 <code>令牌无效或缺失</code>）——
+      不是电话接口没配好。把令牌粘到这里就行：
+      <div class="banner-row">
+        <input id="auth-token-input" type="password" placeholder="粘贴 SIGNAL_TOKEN">
+        <button class="btn primary" id="btn-auth-apply">应用</button>
+        <button class="btn" id="btn-auth-goto">去「令牌」面板</button>
+      </div>
+      <span class="hint">也可以直接用带令牌的链接打开本站：<code>https://你的域名/?token=你的令牌</code>（授权后地址栏会自动擦掉令牌）。</span>
+    </div>
+
     <nav class="tabs" id="cfg-tabs">
       <button class="tab active" data-tab="ops" type="button">操作</button>
       <button class="tab" data-tab="window" type="button">时间段</button>

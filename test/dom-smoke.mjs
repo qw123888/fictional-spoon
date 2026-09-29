@@ -60,7 +60,9 @@ const DEFAULT_CONFIG = {
 };
 
 let saveMode = "kv"; // kv | not_persisted
+let authMode = "open"; // open | token（token = 站点设了 SIGNAL_TOKEN，必须带 X-Auth-Token）
 const posts = [];
+const sentTokens = [];
 
 function storageInfo() {
   return saveMode === "kv"
@@ -73,6 +75,19 @@ async function fakeFetch(url, init = {}) {
   const body = init.body ? JSON.parse(init.body) : null;
   const json = (obj) =>
     new Response(JSON.stringify(obj), { status: 200, headers: { "Content-Type": "application/json" } });
+
+  // 站点设了令牌时的鉴权替身：公开接口放行，其余必须带对令牌
+  const pub = u.includes("/api/health") || u.includes("/api/ping") || u.includes("/api/auth/check");
+  const sent = (init.headers && (init.headers["X-Auth-Token"] || init.headers["x-auth-token"])) || "";
+  if (authMode === "token") {
+    sentTokens.push(sent);
+    if (!pub && sent !== "good-token") {
+      return new Response(JSON.stringify({ ok: false, error: "unauthorized", detail: "令牌无效或缺失" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }
 
   if (u.endsWith("/api/config") && (!init.method || init.method === "GET")) {
     return json({ ok: true, config: DEFAULT_CONFIG, hasAppKey: true, hasDevToken: true, windowText: "每天 00:00-23:59（时区 Asia/Shanghai）", storage: storageInfo() });
@@ -97,7 +112,7 @@ async function fakeFetch(url, init = {}) {
     });
   }
   if (u.endsWith("/api/logs")) return json({ ok: true, items: [], stats: { total: 0, ok: 0, fail: 0, skipped: 0 } });
-  if (u.endsWith("/api/auth/check")) return json({ ok: true, open: false, provided: false });
+  if (u.endsWith("/api/auth/check")) return json({ ok: true, open: authMode !== "token", provided: false });
   if (u.endsWith("/api/balance")) return json({ ok: true, voiceMinutes: 14, money: 0, sms: 2, mail: 10, wxMp: 100 });
   return json({ ok: false, error: "not_found", detail: u });
 }
@@ -212,6 +227,33 @@ eq($("btn-draft").hidden, false, "出现「用草稿回填」按钮（草稿和�
 $("btn-draft").dispatchEvent(new window.Event("click", { bubbles: true }));
 eq($("cfg-maxday").value, "11", "点一下把草稿里的 11 填进表单");
 eq($("save-state").className.includes("dirty"), true, "回填后标记为「有未保存的改动」，等用户确认再写服务器");
+
+console.log("\n[7] 站点设了令牌、浏览器没带：顶部常驻红条 + 就地粘贴");
+authMode = "token";
+ls.delete("pn_token");
+sentTokens.length = 0;
+$("btn-token-apply").dispatchEvent(new window.Event("click", { bubbles: true })); // 触发 refreshConfig → 401
+for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 5));
+eq($("auth-banner").classList.contains("hidden"), false, "顶部出现「本浏览器还没带访问令牌」红条");
+ok($("auth-banner").textContent.includes("令牌无效或缺失"), "红条说清楚被拒的原因，不会被误认为电话接口没配");
+$("auth-token-input").value = "good-token";
+$("btn-auth-apply").dispatchEvent(new window.Event("click", { bubbles: true }));
+for (let i = 0; i < 60; i++) await new Promise((r) => setTimeout(r, 5));
+eq(ls.get("pn_token"), "good-token", "令牌存进本浏览器");
+eq($("auth-banner").classList.contains("hidden"), true, "带上令牌后红条自动消失");
+eq($("cfg-maxday").value, "20", "重新拉到的配置填进了表单（不再是空壳）");
+ok(sentTokens.includes("good-token"), "后续请求确实带上了 X-Auth-Token");
+
+console.log("\n[8] 用带 ?token= 的链接打开：自动授权，不弹提示");
+ls.delete("pn_token");
+sentTokens.length = 0;
+globalThis.__pnTestHref = "https://site.example/?token=good-token";
+await import("../public/app.js?tok=1"); // 二次导入 = 再跑一遍 main()
+for (let i = 0; i < 60; i++) await new Promise((r) => setTimeout(r, 5));
+eq(ls.get("pn_token"), "good-token", "URL 里的令牌被自动收下");
+eq($("auth-banner").classList.contains("hidden"), true, "自动授权后不显示红条");
+ok(sentTokens.includes("good-token"), "自动授权后立刻带着令牌拉配置");
+delete globalThis.__pnTestHref;
 
 console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
 if (fail) {

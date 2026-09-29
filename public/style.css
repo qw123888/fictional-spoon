@@ -254,6 +254,9 @@ input::placeholder { color: #5f5f5f; }
 .banner.warn { border-left-color: var(--warn); background: #2b2b22; }
 .banner.hidden { display: none; }
 .banner code { font-family: var(--mono); color: var(--msg); background: #1b1b1c; padding: 1px 4px; border-radius: 3px; }
+.banner-row { display: flex; gap: 8px; margin: 8px 0 6px; }
+.banner-row input { flex: 1 1 auto; min-width: 0; }
+.banner-row .btn { flex: 0 0 auto; }
 
 /* ---------- 保存栏 ---------- */
 .save-bar { position: sticky; bottom: 12px; display: flex; align-items: center; gap: 10px; padding: 9px 12px; }
