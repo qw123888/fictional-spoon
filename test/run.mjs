@@ -326,8 +326,21 @@ async function testFailureAndFallback() {
   const badCode = await call("/api/signal", { method: "POST", body: { title: "业务错误", content: "x", source: "test" } });
   eq(badCode.data.ok, false, "code=400 → ok=false");
   eq(badCode.data.reason, "spug_400", "原因 = spug_400");
+  eq(badCode.status, 200, "发送失败仍返回 HTTP 200（用 502 会被 Cloudflare 边缘吞掉响应体）");
   eq(mock.phoneCalls.length, 1, "业务错误不重试（仅 1 次）");
   ok(badCode.data.detail.includes("指定渠道未开启"), "错误信息透传（detail 带服务端 msg）");
+
+  // 4.2b 未配置 App Key 也是干净的 200 + reason（注意：env 里的 SPUG_APP_KEY 优先级高于库里的配置）
+  const savedAppKey = ENV.SPUG_APP_KEY;
+  delete ENV.SPUG_APP_KEY;
+  await setConfig({ spug: { appKey: "" } });
+  mock.reset();
+  const noKey = await call("/api/test-call", { method: "POST", body: {} });
+  eq(noKey.status, 200, "未配 App Key 的测试电话 → HTTP 200");
+  eq(noKey.data.reason, "missing_app_key", "原因 = missing_app_key");
+  eq(mock.phoneCalls.length, 0, "没有 App Key 时不会真的发请求");
+  ENV.SPUG_APP_KEY = savedAppKey;
+  await setConfig({ spug: { appKey: "ak_test_key" } });
 
   // 4.3 失败后走备用通道
   mock.reset();

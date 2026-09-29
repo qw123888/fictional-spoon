@@ -74,12 +74,15 @@ export async function handleApi(request, env = {}) {
   }
 
   // ---------- 信号接收接口（电脑端主入口）----------
+  // 注意：业务失败（未配 App Key / 通道报错 / 超时）一律返回 HTTP 200 + ok:false + reason，
+  // 只有鉴权/请求体/路由问题才用 4xx。"发送失败"不是 HTTP 层错误 —— 用 502 会被 Cloudflare
+  // 边缘吞掉响应体，调用方只能看到光秃秃的 502，拿不到 reason。
   if (path === "/api/signal" && method === "POST") {
     return needAuth(async () => {
       const body = await readJson(request);
       if (body === null) return json({ ok: false, error: "bad_json", detail: "请求体不是合法 JSON" }, 400);
       const result = await handleSignal(comm, body);
-      return json(result, result.ok ? 200 : result.skipped ? 200 : 502);
+      return json(result);
     })();
   }
 
@@ -92,7 +95,7 @@ export async function handleApi(request, env = {}) {
         content: body.content || `这是一通测试电话，时间 ${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`,
         source: "test-call"
       });
-      return json(result, result.ok ? 200 : 502);
+      return json(result);
     })();
   }
 
@@ -109,7 +112,7 @@ export async function handleApi(request, env = {}) {
   if (path === "/api/balance" && method === "GET") {
     return needAuth(async () => {
       const result = await comm.balance(url.searchParams.get("kind") || "phone");
-      return json(result, result.ok ? 200 : 502);
+      return json(result);
     })();
   }
 
@@ -118,7 +121,7 @@ export async function handleApi(request, env = {}) {
     return needAuth(async () => {
       const requestId = url.searchParams.get("requestId") || "";
       const result = await comm.queryStatus(requestId, url.searchParams.get("kind") || "phone");
-      return json(result, result.ok ? 200 : 502);
+      return json(result);
     })();
   }
 
