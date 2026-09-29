@@ -1,0 +1,19 @@
+name = "phone-notify"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# 静态页面目录（index.html / app.js / style.css）
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# 配置与日志持久化。先执行：wrangler kv namespace create NOTIFY_KV
+# 把返回的 id 填到下行的 id = "..." 里（不填也能跑，只是配置重启后丢失）
+[[kv_namespaces]]
+binding = "NOTIFY_KV"
+id = ""
+
+[vars]
+# 非敏感默认值可以写这里；密钥请用：wrangler secret put SPUG_APP_KEY
+SPUG_BASE_URL = "https://push.spug.cc"
+SPUG_CHANNEL = "voice"

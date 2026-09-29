@@ -1,0 +1,16 @@
+{
+  "name": "phone-notify-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "监听器电话通知控制台：接收电脑信号 -> 处理模块 -> 电话接口（Cloudflare Workers / Pages Functions）",
+  "type": "module",
+  "scripts": {
+    "dev": "node local/server.mjs",
+    "test": "node test/run.mjs",
+    "deploy": "wrangler deploy",
+    "deploy:pages": "wrangler pages deploy public --project-name phone-notify"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

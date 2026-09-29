@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>电话通知控制台 · phone-notify</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="dot" id="live-dot"></span>
+    <span>电话通知控制台</span>
+    <span class="sub">phone-notify</span>
+  </div>
+  <div class="topbar-right">
+    <span class="pill" id="clock">--:--:--</span>
+    <span class="pill" id="win-pill">时间段：读取中</span>
+    <span class="pill" id="quota-pill">本小时 --/--</span>
+    <span class="pill" id="storage-pill">存储：--</span>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="col-main">
+    <div class="cards" id="status-cards"></div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>通知日志</h2>
+        <div class="actions">
+          <label class="auto"><input type="checkbox" id="auto-refresh" checked> 自动刷新</label>
+          <button class="btn" id="btn-refresh">刷新</button>
+          <button class="btn ghost" id="btn-clear">清空</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th class="w-time">时间</th>
+              <th class="w-lv">级别</th>
+              <th class="w-src">来源</th>
+              <th class="w-route">通道</th>
+              <th>标题 / 内容</th>
+              <th class="w-res">结果</th>
+              <th class="w-ms">耗时</th>
+            </tr>
+          </thead>
+          <tbody id="log-body">
+            <tr><td colspan="7" class="empty">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-foot" id="log-stats">—</div>
+    </div>
+  </section>
+
+  <aside class="col-side">
+    <div class="panel">
+      <div class="panel-head"><h2>手动操作</h2></div>
+      <div class="panel-body">
+        <button class="btn primary wide" id="btn-test">📞 测试电话（真实拨号）</button>
+        <button class="btn wide" id="btn-probe">🔍 电话接口自检（不拨号）</button>
+        <div class="hint" id="op-result"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>手动发信号</h2><span class="tag">走完整流程</span></div>
+      <div class="panel-body">
+        <label class="field"><span>标题</span><input id="sig-title" type="text" value="手动测试信号" maxlength="200"></label>
+        <label class="field"><span>内容</span><input id="sig-content" type="text" placeholder="可选，语音播报内容" maxlength="2000"></label>
+        <label class="check"><input type="checkbox" id="sig-force"> 强制发送（忽略时间段与去重）</label>
+        <button class="btn wide" id="btn-send-signal">发送信号</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>通知总开关</h2></div>
+      <div class="panel-body">
+        <label class="switch">
+          <input type="checkbox" id="cfg-enabled">
+          <span class="slider"></span>
+          <span class="switch-text">允许自动电话通知</span>
+        </label>
+        <div class="hint">关闭后只响应 <code>force</code> 信号与「测试电话」。</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>自动电话时间段</h2></div>
+      <div class="panel-body">
+        <label class="field"><span>模式</span>
+          <select id="cfg-mode">
+            <option value="inside">仅在时间段内拨打</option>
+            <option value="outside">仅在时间段外拨打</option>
+          </select>
+        </label>
+        <label class="field"><span>时区</span>
+          <select id="cfg-tz">
+            <option value="Asia/Shanghai">Asia/Shanghai（北京时间）</option>
+            <option value="Asia/Tokyo">Asia/Tokyo</option>
+            <option value="UTC">UTC</option>
+            <option value="America/New_York">America/New_York</option>
+            <option value="Europe/London">Europe/London</option>
+          </select>
+        </label>
+        <div class="field-col">
+          <span class="lbl">星期</span>
+          <div class="days" id="cfg-days"></div>
+        </div>
+        <div class="field-col">
+          <span class="lbl">时间段（支持跨天，如 23:00 → 07:00）</span>
+          <div id="cfg-ranges" class="ranges"></div>
+          <button class="btn tiny" id="cfg-add-range">+ 添加时间段</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>触发控制（防轰炸）</h2></div>
+      <div class="panel-body">
+        <label class="field"><span>去重窗口(秒)</span><input id="cfg-dedupe" type="number" min="0" max="86400"></label>
+        <label class="field"><span>最小间隔(秒)</span><input id="cfg-mininterval" type="number" min="0" max="3600"></label>
+        <label class="field"><span>每小时上限</span><input id="cfg-maxhour" type="number" min="1" max="500"></label>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>电话接口参数</h2></div>
+      <div class="panel-body">
+        <label class="field"><span>通道</span>
+          <select id="cfg-channel">
+            <option value="voice">voice（语音电话）</option>
+            <option value="app">app（App 推送）</option>
+            <option value="mail">mail（邮件）</option>
+            <option value="wx_mp">wx_mp（微信公众号）</option>
+            <option value="dd">dd（钉钉）</option>
+            <option value="fs">fs（飞书）</option>
+          </select>
+        </label>
+        <label class="field"><span>推送对象</span><input id="cfg-targets" type="text" placeholder="留空 = 用默认语音通道"></label>
+        <label class="field"><span>标题前缀</span><input id="cfg-prefix" type="text" maxlength="32" placeholder="[监听器]"></label>
+        <label class="field"><span>内容截断</span><input id="cfg-contentlimit" type="number" min="20" max="500"></label>
+        <label class="field"><span>重试次数</span><input id="cfg-retry" type="number" min="0" max="5"></label>
+        <label class="field"><span>超时(ms)</span><input id="cfg-timeout" type="number" min="1000" max="60000"></label>
+        <label class="field"><span>App Key</span><input id="cfg-appkey" type="text" placeholder="ak_..."></label>
+        <div class="hint">App Key 也可以放 Cloudflare Secret（<code>SPUG_APP_KEY</code>），环境变量优先。</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>备用通道（电话挂了兜底）</h2></div>
+      <div class="panel-body">
+        <label class="check"><input type="checkbox" id="cfg-fallback-enabled"> 电话发送失败时转发到 Webhook</label>
+        <label class="field"><span>Webhook</span><input id="cfg-fallback-url" type="url" placeholder="https://..."></label>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>访问令牌</h2></div>
+      <div class="panel-body">
+        <label class="field"><span>令牌</span><input id="token-input" type="password" placeholder="留空则不校验"></label>
+        <div class="row">
+          <button class="btn tiny" id="btn-token-save">保存令牌</button>
+          <button class="btn tiny ghost" id="btn-token-apply">本地使用</button>
+        </div>
+        <div class="hint">「本地使用」只存在浏览器里；电脑端发信号要用同一个令牌（请求头 <code>X-Auth-Token</code>）。</div>
+      </div>
+    </div>
+
+    <div class="save-bar">
+      <button class="btn primary wide" id="btn-save">保存配置</button>
+    </div>
+  </aside>
+</main>
+
+<script src="./app.js" type="module"></script>
+</body>
+</html>
