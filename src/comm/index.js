@@ -216,6 +216,8 @@ export class CommModule {
     const source = task.source || "pc";
     const reason = String(report.reason || (ok ? "sent" : "failed"));
     const detail = String(report.detail || "");
+    // 执行器主动跳过的（例如任务排太久已经过期）：不算故障——不记 error、不触发备用通道
+    const skipped = reason === "expired";
     const ms = Number(report.ms || 0);
     const requestId = String(report.requestId || "");
     const ip = opts.ip || report.ip || "";
@@ -223,7 +225,7 @@ export class CommModule {
     const dialIp = String(report.dialIp || opts.dialIp || "");
 
     await this.log.push({
-      level: ok ? "ok" : "error",
+      level: skipped ? "skip" : ok ? "ok" : "error",
       title, content, source,
       route: "phone-pc",
       ok, reason, detail, ms, requestId,
@@ -237,7 +239,7 @@ export class CommModule {
     });
 
     let fallback = null;
-    if (!ok && cfg.fallback.enabled) {
+    if (!ok && !skipped && cfg.fallback.enabled) {
       const fb = this.registry.get("webhook");
       if (fb) {
         const ctx = { config: cfg, store: this.store, log: this.log, env: this.env };

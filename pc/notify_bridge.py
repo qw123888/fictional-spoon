@@ -82,6 +82,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "dial_executor": True,
     "dial_poll_interval": 3,
     "dial_batch": 5,
+    # 任务在队列里躺超过这么多秒就不拨了（防"半夜开机补拨一堆"）。0 = 不设上限。
+    "dial_max_age": 600,
 }
 
 

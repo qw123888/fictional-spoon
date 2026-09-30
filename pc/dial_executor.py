@@ -42,6 +42,7 @@ import socket
 import sys
 import threading
 import time
+from datetime import datetime
 from typing import Any, Callable, Optional
 from urllib.parse import quote
 
@@ -53,6 +54,9 @@ DEFAULT_DIAL: dict[str, Any] = {
     "dial_executor": True,
     "dial_poll_interval": 3,
     "dial_batch": 5,
+    # 任务在队列里躺太久就别拨了：电话是即时通知，半夜突然响比不打还糟。
+    # 0 表示不设上限。排太久没拨出去的原因通常是监听器压根没开。
+    "dial_max_age": 600,
 }
 
 
@@ -66,6 +70,7 @@ class DialExecutor:
         self.enabled = bool(cfg.get("dial_executor", True))
         self.interval = float(interval or cfg.get("dial_poll_interval", 3) or 3)
         self.batch = int(batch or cfg.get("dial_batch", 5) or 5)
+        self.max_age = float(cfg.get("dial_max_age", 600) or 0)
         self.host = socket.gethostname()
         self._log_fn = log_fn
         self._stop = threading.Event()
@@ -75,7 +80,7 @@ class DialExecutor:
         self._dial_ip_at: float = 0.0
         self._lock = threading.Lock()
         self.stats = {"polls": 0, "rounds_with_task": 0, "claimed": 0, "ok": 0,
-                      "failed": 0, "errors": 0, "last_poll": 0.0}
+                      "failed": 0, "expired": 0, "errors": 0, "last_poll": 0.0}
         self.last_error = ""
         self.last_result: dict = {}
 
@@ -169,10 +174,46 @@ class DialExecutor:
             self.stats["claimed"] += len(tasks)
             self.stats["rounds_with_task"] += 1
         for task in tasks:
+            age = self.task_age(task)
+            if self.max_age > 0 and age > self.max_age:
+                # 排太久了（多半是监听器一直没开）：不打，只如实回报 + 写日志。
+                # 免得半夜电脑一开机，几小时前的通知突然响起来。
+                with self._lock:
+                    self.stats["expired"] += 1
+                result = {
+                    "ok": False,
+                    "reason": "expired",
+                    "detail": f"排队 {int(age)} 秒仍未拨出（上限 {int(self.max_age)} 秒），已跳过",
+                    "ms": 0,
+                }
+                self.last_result = result
+                self._report(task, result)
+                continue
             result = self.dial_task(task, spug)
             self.last_result = result
             self._report(task, result)
         return len(tasks)
+
+    def task_age(self, task: dict, now: Optional[float] = None) -> float:
+        """任务从入队到现在过了多少秒。
+
+        解析不出来就返回 0（当成新任务）——宁可多打一通，也别把正常任务误判成过期。
+        """
+        now = time.time() if now is None else now
+        ts = task.get("ts")
+        try:
+            if isinstance(ts, (int, float)) and ts > 0:
+                return max(0.0, now - float(ts) / 1000.0)
+        except Exception:
+            pass
+        iso = str(task.get("enqueuedAt") or "")
+        if iso:
+            try:
+                t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+                return max(0.0, now - t.timestamp())
+            except Exception:
+                pass
+        return 0.0
 
     # ---------- 拨号（直连，绝不走代理）----------
     def _session(self) -> requests.Session:
@@ -347,6 +388,8 @@ class DialExecutor:
             self._log(f"电话已提交平台（还在拨，未确认接通）: {task.get('title', '')} {result.get('detail', '')}".strip(), "info")
         elif result.get("ok"):
             self._log(f"电话已拨出（电脑端直连）: {task.get('title', '')} {result.get('detail', '')}".strip(), "ok")
+        elif result.get("reason") == "expired":
+            self._log(f"任务排队过久已跳过: {task.get('title', '')} {result.get('detail', '')}".strip(), "warn")
         else:
             self._log(f"电脑端拨号失败 [{result.get('reason', '?')}] {result.get('detail', '')}", "warn")
         if not resp.get("ok"):

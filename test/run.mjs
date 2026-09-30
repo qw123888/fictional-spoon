@@ -819,6 +819,22 @@ async function testPcDialMode() {
   logs = await call("/api/logs?limit=5");
   eq(logs.data.items.some((x) => x.source.endsWith("#fallback")), true, "备用通道那条也进了日志");
 
+  // --- 9.5) 执行器跳过过期任务（expired）→ 不是故障，不触发备用通道 ---
+  mock.webhookCalls.length = 0;
+  r = await call("/api/test-call", { method: "POST", body: { title: "排太久的一通" } });
+  box = await call("/api/outbox?claim=1");
+  eq(box.data.tasks.length, 1, "领到过期用例的任务");
+  res = await call("/api/outbox/result", {
+    method: "POST",
+    body: { id: box.data.tasks[0].id, ok: false, reason: "expired", ms: 0,
+            detail: "排队 900 秒仍未拨出（上限 600 秒），已跳过" }
+  });
+  eq(res.data.dialed, false, "过期任务没有拨出去");
+  eq(res.data.fallback, null, "主动跳过不触发备用 Webhook");
+  eq(mock.webhookCalls.length, 0, "Webhook 一条都没收到");
+  logs = await call("/api/logs?limit=5");
+  eq(logs.data.items[0].level, "skip", "主动跳过记 skip 级，不该当成 error");
+
   // --- 10) 执行器不在线时排队会如实说 ---
   ENV.NOTIFY_KV.map.delete("executor:v1");
   r = await call("/api/test-call", { method: "POST", body: { title: "没人接的一通" } });

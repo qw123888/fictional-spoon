@@ -185,7 +185,8 @@ py -3 notify_bridge.py --signal "标题" "内容"        # 发一条普通信号
   py -3 dial_executor.py --config config.json --once     # 领一轮任务（没有就退出）
   py -3 dial_executor.py --config config.json --dial "测试" "正文"   # 真拨一通
   ```
-- `config.json → notify` 里的开关：`dial_executor`（默认 `true`）、`dial_poll_interval`（默认 3 秒）、`dial_batch`（一次领几条，默认 5）。
+- `config.json → notify` 里的开关：`dial_executor`（默认 `true`）、`dial_poll_interval`（默认 3 秒）、`dial_batch`（一次领几条，默认 5）、`dial_max_age`（默认 600 秒：任务在队列里躺超过这么久就不拨了，只如实回报 `reason: "expired"` 并记一条 `skip` 级日志，**不触发备用通道**；填 `0` 关掉这个限制）。
+  - 为什么要这个：电脑关机时排下的任务，等晚上一开机就全部拨出来会吓人（电话是即时通知，迟到的通知没意义）。过期的那条不会静默丢掉——面板/日志里能看到「任务排队过久已跳过」。
 
 ---
 
@@ -373,6 +374,7 @@ comm.register(new SmsAdapter(cfg));   // 非 ChannelAdapter 实例会被拒绝
 | `spug_403` + `请求IP: 1.2.3.4 不在IP白名单内`（电脑端拨号也报） | 这台电脑现在的出网 IP 和白名单里写的不一样（换了网络 / 代理客户端在抢路由）。看面板标签里的「拨号出口 IP」，把它更新进 Spug 白名单。注意执行器**不走代理**，代理开着也不影响它的出口 IP。 |
 | 日志里 `spug_pending` / `平台状态：排队中` 或 `拨打中` | 不是错误：Spug 已受理并开始拨打，只是复核那几秒还没接通（`status 0/1`）。电话通常几秒后就通（`status 2`）；不会触发备用通道。若长时间都是 pending，用 `request_id` 去 Spug 控制台或 `/request/query` 复查。 |
 | 执行器不在线时点测试电话：`no_executor`（日志级别 warn） | 已排队，等执行器上线（开机/启动 `start.bat`）就会自动拨出，不需要重新点。队列上限 100 条。 |
+| 日志里「任务排队过久已跳过」/ 回报 `reason: "expired"`（日志级别 skip） | 不是故障：那条通知排了超过 `notify.dial_max_age`（默认 600 秒）还没被拨出（通常是电脑关机期间排的），执行器主动跳过并如实回报。要允许补拨就把它调大或填 `0`。 |
 | `spug_400` + `因应用key限制，无可用通道` | 这个 App Key 的通道权限范围里没有你在 `channel` 里指定的通道。到 Spug 控制台改该 App Key 的授权通道，或换一个 Key。 |
 | 接口报 `Invalid data type for parse` | 请求体带了 **UTF-8 BOM**（PowerShell `Set-Content -Encoding UTF8` 会写 BOM）。用无 BOM 的 UTF-8 重发即可；页面与 Node/Python 代码不受影响。 |
 | 电话打了但对方没接到 / `status=3` `此号码触发流控` | 撞上 Spug 语音通道自身的限流：**1 通/分钟、5 通/小时、20 通/天**（按号码）。此时 `xsend` 仍返回 `code:200`，只有查发送状态才看得到 —— 所以站点侧默认值已按此对齐（见 §4），撞限流的那通**不计费**。 |
