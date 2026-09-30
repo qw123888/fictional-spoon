@@ -845,6 +845,22 @@ async function testPcDialMode() {
   eq(logs.data.items[0].level, "warn", "只是排队等着，不该记成 error");
   await call("/api/outbox?claim=1"); // 清掉这条，别影响后面的用例
 
+  // --- 10.5) 心跳被节流成 5 分钟一次 → 3 分钟前的心跳仍算在线（曾被误判成 no_executor） ---
+  await setConfig({ phone: { dialVia: "pc" } });
+  ENV.NOTIFY_KV.map.set("executor:v1", JSON.stringify({
+    ts: Date.now() - 3 * 60 * 1000,
+    iso: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+    host: "PC-A", version: "1", ip: "", dialIp: "182.46.51.186"
+  }));
+  r = await call("/api/test-call", { method: "POST", body: { title: "三分钟前的心跳" } });
+  eq(r.data.queued, true, "照样入队");
+  eq(r.data.reason, "queued", "3 分钟前的心跳仍算执行器在线 → 原因不是 no_executor");
+  eq(r.data.ok, true, "在线就按成功记（心跳节流 5 分钟，判定窗口必须比它大）");
+  logs = await call("/api/logs?limit=5");
+  eq(logs.data.items[0].level, "ok", "不再误报成 warn");
+  await call("/api/outbox?claim=1"); // 清掉这条
+  ENV.NOTIFY_KV.map.delete("executor:v1");
+
   // --- 11) 鉴权 ---
   r = await call("/api/outbox", { token: "" });
   eq(r.status, 401, "队列接口必须带令牌");

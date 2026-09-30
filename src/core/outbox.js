@@ -23,10 +23,15 @@ export const EXECUTOR_KEY = "executor:v1";
 
 export const MAX_TASKS = 100;
 export const DEFAULT_LEASE_MS = 90 * 1000;
-/** 超过这个时间没心跳就算执行器离线 */
-export const EXECUTOR_ONLINE_MS = 90 * 1000;
 /** 心跳节流：执行器 3 秒轮询一次，不能每次都写 KV */
 export const HEARTBEAT_MIN_MS = 5 * 60 * 1000;
+/**
+ * 超过这个时间没心跳才算执行器离线。
+ * 必须大于 HEARTBEAT_MIN_MS：心跳被节流成 5 分钟写一次，
+ * 判定窗口要是只有 90 秒，那只活得好好的执行器会常年显示"离线"
+ * （用户看到的"电话没反应 / 执行器不在线"多半就是这么来的）。
+ */
+export const EXECUTOR_ONLINE_MS = HEARTBEAT_MIN_MS + 60 * 1000;
 
 function rid(prefix = "d") {
   return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;

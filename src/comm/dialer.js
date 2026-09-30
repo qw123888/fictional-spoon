@@ -43,6 +43,13 @@ export class PcDialDispatcher {
 
     const online = executor.online;
     const where = executor.ip ? `，出口 IP ${executor.ip}` : "";
+    // 心跳被节流成 5 分钟写一次，所以"在线"判定窗口（EXECUTOR_ONLINE_MS）必须比它大：
+    // 否则活得好好的执行器会常年被判成离线，监听器日志就会写"电话通知失败（no_executor）"，
+    // 而电话其实几秒后照样拨出去了。
+    const seen = executor.lastSeen ? executor.lastSeen.slice(11, 19) : "";
+    const age = executor.ageSeconds === null || executor.ageSeconds === undefined
+      ? "从未"
+      : `${Math.round(Number(executor.ageSeconds) / 60)} 分钟前`;
     return {
       ok: Boolean(r.persisted && online),
       queued: true,
@@ -57,7 +64,8 @@ export class PcDialDispatcher {
         ? "拨号任务没能写进队列（存储不可用，先绑 KV）"
         : online
           ? `已排队，等电脑端拨号（执行器在线${where}，现在 ${r.depth} 条待拨）`
-          : `已排队，但电脑端执行器当前不在线${where}（队列里现在 ${r.depth} 条，等它上线就会拨）`,
+          : `已排队，但电脑端执行器最近没心跳（最后一次 ${seen || "未知"}，约 ${age}${where}）：` +
+            `先确认监听器开着、电脑端拨号执行器在跑；它一上线就会把队列里的 ${r.depth} 条拨出去`,
       executor
     };
   }
